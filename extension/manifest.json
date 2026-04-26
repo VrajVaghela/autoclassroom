@@ -1,0 +1,18 @@
+{
+  "manifest_version": 3,
+  "name": "AutoClassroom",
+  "version": "1.0",
+  "description": "Trigger the AutoClassroom LLM pipeline.",
+  "permissions": [
+    "activeTab",
+    "scripting"
+  ],
+  "action": {
+    "default_popup": "popup.html"
+  },
+  "host_permissions": [
+    "*://classroom.google.com/*",
+    "http://127.0.0.1:5000/*",
+    "http://localhost:5000/*"
+  ]
+}
