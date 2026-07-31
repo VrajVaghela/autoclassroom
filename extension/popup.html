@@ -1,41 +1,100 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 
 <head>
-  <style>
-    body {
-      font-family: Arial, sans-serif;
-      padding: 15px;
-      width: 250px;
-    }
-
-    button {
-      width: 100%;
-      padding: 10px;
-      background-color: #4CAF50;
-      color: white;
-      border: none;
-      cursor: pointer;
-      border-radius: 4px;
-    }
-
-    button:hover {
-      background-color: #45a049;
-    }
-
-    #status {
-      margin-top: 10px;
-      font-size: 12px;
-      color: #333;
-      word-wrap: break-word;
-    }
-  </style>
+  <meta charset="utf-8">
+  <title>AutoClassroom</title>
+  <link rel="stylesheet" href="popup.css">
 </head>
 
 <body>
-  <h3>AutoClassroom</h3>
-  <button id="triggerBtn">Run</button>
-  <div id="status"></div>
+  <!-- Main view -->
+  <section id="mainView">
+    <header class="bar">
+      <h1>AutoClassroom</h1>
+      <button id="openSettings" class="icon-btn" type="button"
+              title="Settings" aria-label="Open settings">
+        <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+          <path d="M12 15.5A3.5 3.5 0 1 1 12 8.5a3.5 3.5 0 0 1 0 7z" />
+          <path d="M19.4 13a7.8 7.8 0 0 0 0-2l2-1.6-2-3.4-2.4 1a7.6 7.6 0 0 0-1.7-1l-.4-2.6h-3.9l-.4 2.6a7.6 7.6 0 0 0-1.7 1l-2.4-1-2 3.4L6.6 11a7.8 7.8 0 0 0 0 2l-2 1.6 2 3.4 2.4-1a7.6 7.6 0 0 0 1.7 1l.4 2.6h3.9l.4-2.6a7.6 7.6 0 0 0 1.7-1l2.4 1 2-3.4z" />
+        </svg>
+      </button>
+    </header>
+
+    <p id="providerLine" class="muted">Checking server…</p>
+
+    <button id="triggerBtn" class="primary" type="button">Solve this assignment</button>
+
+    <div id="status" class="status" role="status" aria-live="polite"></div>
+    <ul id="fileList" class="files" hidden></ul>
+  </section>
+
+  <!-- Settings view -->
+  <section id="settingsView" hidden>
+    <header class="bar">
+      <button id="backBtn" class="icon-btn" type="button"
+              title="Back" aria-label="Back to main view">
+        <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+          <path d="M15 5l-7 7 7 7" fill="none" stroke="currentColor" stroke-width="2"
+                stroke-linecap="round" stroke-linejoin="round" />
+        </svg>
+      </button>
+      <h1>Settings</h1>
+    </header>
+
+    <div class="field">
+      <label for="outputDir">Save solutions to</label>
+      <div class="row">
+        <input id="outputDir" type="text" spellcheck="false"
+               placeholder="C:\Users\you\Documents\Assignments">
+        <button id="browseBtn" class="secondary" type="button">Browse…</button>
+      </div>
+      <p class="hint">The folder where each assignment's files are written.</p>
+    </div>
+
+    <div class="field">
+      <label for="providerSelect">AI provider</label>
+      <select id="providerSelect"></select>
+    </div>
+
+    <div class="field">
+      <label for="modelInput">Model</label>
+      <input id="modelInput" type="text" spellcheck="false">
+      <p class="hint" id="modelHint"></p>
+    </div>
+
+    <div class="field" id="baseUrlField" hidden>
+      <label for="baseUrlInput">Base URL</label>
+      <input id="baseUrlInput" type="text" spellcheck="false"
+             placeholder="https://your-endpoint/v1">
+      <p class="hint">An OpenAI-compatible endpoint.</p>
+    </div>
+
+    <div class="field">
+      <label for="apiKeyInput">API key</label>
+      <input id="apiKeyInput" type="password" autocomplete="off" spellcheck="false">
+      <p class="hint" id="keyHint"></p>
+    </div>
+
+    <div class="field">
+      <label class="check">
+        <input id="runCode" type="checkbox">
+        <span>Run generated code to capture real output</span>
+      </label>
+      <p class="hint">
+        Off by default. When on, generated programs run on this machine so
+        reports show genuine output instead of predicted output.
+      </p>
+    </div>
+
+    <div class="row">
+      <button id="testBtn" class="secondary" type="button">Test connection</button>
+      <button id="saveBtn" class="primary" type="button">Save</button>
+    </div>
+
+    <div id="settingsStatus" class="status" role="status" aria-live="polite"></div>
+  </section>
+
   <script src="popup.js"></script>
 </body>
 
