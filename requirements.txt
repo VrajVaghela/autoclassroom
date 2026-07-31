@@ -1,9 +1,24 @@
+# Server
 flask
 flask-cors
+requests
+python-dotenv
+
+# Google Classroom + Drive
 google-api-python-client
 google-auth-httplib2
 google-auth-oauthlib
-google-generativeai
-python-dotenv
 pdfplumber
-requests
+
+# Deliverable generation
+python-docx
+reportlab
+nbformat
+pillow
+
+# Optional: executes generated notebooks so their outputs are real.
+# Only needed if you turn on "Run generated code" in settings.
+# nbclient
+
+# Tests
+pytest
