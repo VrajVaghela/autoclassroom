@@ -11,6 +11,10 @@ folder you choose.
 - **Complete solutions, not just code** — produces the actual deliverables the
   assignment asks for: Jupyter notebooks (`.ipynb`), Word lab reports
   (`.docx`) with output screenshots, PDFs, and source files.
+- **A file per question** — the assignment is split into its questions and each
+  one is solved in its own call, so you get `q1_*.py`, `q2_*.py`, … instead of
+  everything crammed into one file. If the assignment wants a single write-up,
+  the per-question sections are merged into one report.
 - **Bring your own AI** — Gemini, OpenAI, Anthropic Claude, OpenRouter, Groq,
   xAI Grok, or any OpenAI-compatible endpoint. Switch providers from the
   extension.
@@ -26,7 +30,7 @@ folder you choose.
 | `server.py` | Local Flask API the extension talks to |
 | `config.py` | Settings store (output folder, provider, API keys) |
 | `providers.py` | One `complete()` call across all supported AI providers |
-| `llm_generator.py` | Prompts the model for a full set of deliverables |
+| `llm_generator.py` | Splits an assignment into questions and solves each one |
 | `file_manager.py` | Writes a solution into the chosen output folder |
 | `artifacts/` | Renderers for notebooks, Word/PDF reports, screenshots |
 | `classroom_api.py` | Google Classroom + Drive access |

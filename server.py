@@ -204,15 +204,21 @@ def process_assignment():
         result = save_solution(title, solution, cfg=cfg)
         print(f"Wrote {len(result['files'])} file(s) to {result['dir']}")
 
+        questions = solution.get("questions") or 1
         message = f"Saved {len(result['files'])} file(s) to {result['dir']}"
+        if questions > 1:
+            message += f" for {questions} question(s)"
         return jsonify({
             "success": True,
             "message": message,
             "title": title,
             "summary": solution.get("summary", ""),
+            "questions": questions,
             "dir": result["dir"],
             "files": result["files"],
-            "notes": result["notes"],
+            # Generation notes first: a question that failed matters more than a
+            # file-writing detail.
+            "notes": (solution.get("notes") or []) + result["notes"],
         })
 
     except providers.ProviderError as e:

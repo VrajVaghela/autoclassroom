@@ -97,6 +97,52 @@ MODEL_REPLY = json.dumps({
     ],
 })
 
+TWO_QUESTIONS = """
+Lab 5: Two Programs
+
+Q1. Write a Python program that prints the factorial of 5.
+Q2. Write a Python program that prints a reversed string.
+
+Submit a single lab report covering both questions.
+"""
+
+SPLIT_REPLY = json.dumps({
+    "report_style": "combined",
+    "questions": [
+        {"number": 1, "title": "Factorial", "instructions": "Print the factorial of 5."},
+        {"number": 2, "title": "Reverse", "instructions": "Print a reversed string."},
+    ],
+})
+
+
+def _question_reply(number, name, code, aim):
+    return json.dumps({
+        "summary": f"Question {number}",
+        "language": "python",
+        "artifacts": [
+            {"kind": "code", "filename": f"q{number}_{name}.py", "content": code},
+            {"kind": "docx", "filename": f"q{number}_report.docx", "blocks": [
+                {"type": "heading", "text": "Aim", "level": 2},
+                {"type": "paragraph", "text": aim},
+                {"type": "screenshot", "command": f"python q{number}_{name}.py",
+                 "output": "PREDICTED OUTPUT", "caption": "Program output"},
+            ]},
+        ],
+    })
+
+
+def two_question_model(system, user, **kwargs):
+    """Stub provider for the multi-question run: split first, then one per question."""
+    import llm_generator
+
+    if system is llm_generator.SPLIT_SYSTEM_PROMPT:
+        return SPLIT_REPLY
+    if "question 2 of" in user:
+        return _question_reply(2, "reverse", "print('dlrow olleh'[::-1])\n",
+                               "To reverse a string.")
+    return _question_reply(1, "factorial", "print(120)\n", "To compute 5!.")
+
+
 failures = []
 
 
@@ -222,7 +268,35 @@ def main():
               again.status_code == 200 and again.json()["dir"] != target,
               again.text[:200])
 
-        print("\n7. Error handling")
+        print("\n7. Multi-question assignment -> one file per question")
+        original_details = server.get_assignment_details
+        original_complete = providers.complete
+        server.get_assignment_details = lambda c, w: ("Lab 5: Two Programs", TWO_QUESTIONS)
+        providers.complete = two_question_model
+        try:
+            multi = requests.post(f"{BASE}/process_assignment", headers=HEAD, timeout=180,
+                                  json={"courseId": "123", "courseWorkId": "789"})
+            check("multi-question run succeeded", multi.status_code == 200, multi.text[:300])
+            if multi.status_code == 200:
+                info = multi.json()
+                check("two questions detected", info.get("questions") == 2, str(info.get("questions")))
+                names = sorted(info["files"])
+                check("one code file per question",
+                      names[:2] == ["q1_factorial.py", "q2_reverse.py"], str(names))
+                check("reports merged into one document",
+                      len([n for n in names if n.endswith(".docx")]) == 1, str(names))
+
+                merged = os.path.join(info["dir"], "report.docx")
+                if os.path.exists(merged):
+                    with zipfile.ZipFile(merged) as z:
+                        xml = z.read("word/document.xml").decode("utf-8", "ignore")
+                    check("merged report covers question 1", "Question 1: Factorial" in xml)
+                    check("merged report covers question 2", "Question 2: Reverse" in xml)
+        finally:
+            server.get_assignment_details = original_details
+            providers.complete = original_complete
+
+        print("\n8. Error handling")
         bad = requests.post(f"{BASE}/process_assignment", headers=HEAD, timeout=10, json={})
         check("missing ids -> 400", bad.status_code == 400)
 
