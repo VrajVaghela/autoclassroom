@@ -54,6 +54,10 @@ DEFAULTS = {
     # Off by default: the code comes from an LLM reading an untrusted assignment.
     "run_code": False,
     "run_timeout": 20,
+    # How many times a program that fails to run is handed back to the model to
+    # be fixed. Only reachable when run_code is on — a failure has to be seen
+    # before it can be repaired. 0 turns repairs off.
+    "repair_attempts": 2,
 }
 
 
@@ -138,6 +142,12 @@ def update(patch):
         except (TypeError, ValueError):
             pass
 
+    if "repair_attempts" in patch:
+        try:
+            cfg["repair_attempts"] = max(0, min(5, int(patch["repair_attempts"])))
+        except (TypeError, ValueError):
+            pass
+
     for field in ("models", "api_keys"):
         incoming = patch.get(field)
         if not isinstance(incoming, dict):
@@ -210,5 +220,6 @@ def public_view():
         "custom_base_url": cfg.get("custom_base_url", ""),
         "run_code": bool(cfg.get("run_code")),
         "run_timeout": cfg.get("run_timeout", 20),
+        "repair_attempts": cfg.get("repair_attempts", DEFAULTS["repair_attempts"]),
         "providers": providers,
     }

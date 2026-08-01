@@ -152,6 +152,12 @@ function renderProviderFields() {
   }
 }
 
+// Repairs need a program to have failed in front of us, so the control only
+// means anything while local execution is on.
+function renderRunFields() {
+  $("repairField").hidden = !$("runCode").checked;
+}
+
 async function loadSettings() {
   const status = $("settingsStatus");
   try {
@@ -164,6 +170,8 @@ async function loadSettings() {
   $("outputDir").value = settings.output_dir || "";
   $("baseUrlInput").value = settings.custom_base_url || "";
   $("runCode").checked = Boolean(settings.run_code);
+  $("repairAttempts").value = settings.repair_attempts ?? 2;
+  renderRunFields();
 
   const select = $("providerSelect");
   select.textContent = "";
@@ -184,6 +192,7 @@ function collectPatch() {
     output_dir: $("outputDir").value.trim(),
     provider,
     run_code: $("runCode").checked,
+    repair_attempts: Number($("repairAttempts").value),
     models: { [provider]: $("modelInput").value.trim() },
   };
   if (provider === "custom") {
@@ -298,6 +307,7 @@ document.addEventListener("DOMContentLoaded", () => {
   $("testBtn").addEventListener("click", testConnection);
 
   $("providerSelect").addEventListener("change", renderProviderFields);
+  $("runCode").addEventListener("change", renderRunFields);
   $("apiKeyInput").addEventListener("input", (event) => {
     typedKeys[$("providerSelect").value] = event.target.value;
   });

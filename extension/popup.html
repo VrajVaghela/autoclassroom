@@ -87,6 +87,15 @@
       </p>
     </div>
 
+    <div class="field" id="repairField" hidden>
+      <label for="repairAttempts">Repair attempts</label>
+      <input id="repairAttempts" class="narrow" type="number" min="0" max="5" step="1">
+      <p class="hint">
+        When a generated program fails to run, send the error back to the AI and
+        ask it to fix the file, then run it again. Set to 0 to never retry.
+      </p>
+    </div>
+
     <div class="row">
       <button id="testBtn" class="secondary" type="button">Test connection</button>
       <button id="saveBtn" class="primary" type="button">Save</button>

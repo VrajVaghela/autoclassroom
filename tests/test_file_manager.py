@@ -30,7 +30,10 @@ def test_unique_dir_never_overwrites(tmp_path):
 
 
 def _cfg(tmp_path, **over):
-    cfg = {"output_dir": str(tmp_path), "run_code": False, "run_timeout": 10}
+    # repair_attempts defaults to 0 here so no test reaches for a real provider;
+    # the repair loop itself is covered in test_repair.py.
+    cfg = {"output_dir": str(tmp_path), "run_code": False,
+           "run_timeout": 10, "repair_attempts": 0}
     cfg.update(over)
     return cfg
 
@@ -137,3 +140,45 @@ def test_run_code_captures_failure_text(tmp_path):
     ]}
     fm.save_solution("Lab 9", solution, cfg=_cfg(tmp_path, run_code=True))
     assert "boom" in solution["artifacts"][1]["blocks"][0]["output"]
+
+
+def test_repaired_code_reaches_the_report(tmp_path, monkeypatch):
+    """A fixed file must also fix the listing that quotes it."""
+    import providers
+    fixed = "print('WORKS')\n"
+    monkeypatch.setattr(providers, "complete", lambda system, user, **kw: fixed)
+
+    broken = "raise ValueError('boom')\n"
+    solution = {"summary": "Print a greeting.", "artifacts": [
+        {"kind": "code", "filename": "main.py", "content": broken},
+        {"kind": "docx", "filename": "r.docx", "blocks": [
+            {"type": "code", "text": broken},
+            {"type": "screenshot", "command": "python main.py", "output": "predicted"},
+        ]},
+    ]}
+    res = fm.save_solution("Lab 10", solution,
+                           cfg=_cfg(tmp_path, run_code=True, repair_attempts=1))
+
+    blocks = solution["artifacts"][1]["blocks"]
+    assert blocks[0]["text"].strip() == fixed.strip(), "the listing still shows broken code"
+    assert "WORKS" in blocks[1]["output"]
+    assert (tmp_path / "Lab 10" / "main.py").read_text() == fixed
+    assert any("repaired" in n for n in res["notes"])
+
+
+def test_unrepaired_code_keeps_its_report_listing(tmp_path, monkeypatch):
+    import providers
+    monkeypatch.setattr(providers, "complete",
+                        lambda system, user, **kw: "raise ValueError('still')\n")
+
+    broken = "raise ValueError('boom')\n"
+    solution = {"artifacts": [
+        {"kind": "code", "filename": "main.py", "content": broken},
+        {"kind": "docx", "filename": "r.docx",
+         "blocks": [{"type": "code", "text": broken}]},
+    ]}
+    fm.save_solution("Lab 11", solution,
+                     cfg=_cfg(tmp_path, run_code=True, repair_attempts=1))
+
+    assert solution["artifacts"][1]["blocks"][0]["text"] == broken
+    assert (tmp_path / "Lab 11" / "main.py").read_text() == broken

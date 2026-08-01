@@ -32,6 +32,7 @@ folder you choose.
 | `providers.py` | One `complete()` call across all supported AI providers |
 | `llm_generator.py` | Splits an assignment into questions and solves each one |
 | `file_manager.py` | Writes a solution into the chosen output folder |
+| `repair.py` | Runs the generated code and asks the AI to fix what fails |
 | `artifacts/` | Renderers for notebooks, Word/PDF reports, screenshots |
 | `classroom_api.py` | Google Classroom + Drive access |
 | `folder_picker.py` | Native folder dialog, run as a subprocess |
@@ -82,7 +83,7 @@ folder you choose.
    - **AI provider** and **Model** — choose which AI writes your solutions.
    - **API key** — pasted keys are stored locally in `config.json`
      (gitignored). **Test connection** verifies the key before you rely on it.
-   - **Run generated code** — see the note below.
+   - **Run generated code** and **Repair attempts** — see the notes below.
 
 ### Using it
 
@@ -106,6 +107,7 @@ takes precedence over the environment.
 | `custom_base_url` | — | Endpoint for the `custom` provider |
 | `run_code` | `false` | Execute generated code (see below) |
 | `run_timeout` | `20` | Seconds before a run is killed |
+| `repair_attempts` | `2` | Times a failing program is sent back to be fixed |
 
 ### About "Run generated code"
 
@@ -117,6 +119,27 @@ screenshots what it really printed.
 That is genuinely more useful — and it means code written by an AI from a
 document you didn't write gets executed locally. It is off by default and
 opt-in for that reason. Only turn it on for assignments you trust.
+
+### About "Repair attempts"
+
+Running the code also means finding out when it doesn't work, so with execution
+on the generator stops being a single pass. A program that crashes is handed
+back to the model with its own source and the traceback, and the fix is run
+again — up to `repair_attempts` times (`0` turns this off). Notebooks are
+repaired the same way, one failing cell per round, re-running the whole
+notebook after each fix.
+
+Two rules keep this from making things worse:
+
+- **A repair is kept only if it works.** When the attempts run out, the model's
+  original file is restored, so a report never quotes code that was never run.
+- **Programs waiting on typed input are left alone.** They run with stdin
+  closed, so an interactive assignment dies on its first `input()`. That's this
+  tool's limitation, not a bug in the code, and "fixing" it would mean
+  hardcoding away the interactivity the assignment asked for.
+
+When a repair does land, the report's code listing is updated to match the file
+that actually ran.
 
 ## 🔒 Notes on security
 

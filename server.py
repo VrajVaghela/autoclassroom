@@ -22,6 +22,7 @@ from flask_cors import CORS
 
 import config
 import providers
+import repair
 from classroom_api import get_assignment_details
 from file_manager import save_solution
 from llm_generator import generate_solution
@@ -244,5 +245,8 @@ if __name__ == "__main__":
           f"({config.get_model(cfg['provider'], cfg)})")
     print(f"  api key  : {'set' if config.get_api_key(cfg['provider'], cfg) else 'MISSING'}")
     print(f"  output   : {cfg['output_dir']}")
+    if cfg.get("run_code"):
+        attempts = repair.attempts_for(cfg)
+        print(f"  run code : on, {'no repairs' if not attempts else f'repair x{attempts}'}")
     # use_reloader=False keeps the Google OAuth flow from firing twice in dev.
     app.run(host="127.0.0.1", port=5000, debug=True, use_reloader=False)

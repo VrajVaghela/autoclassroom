@@ -11,9 +11,13 @@ recorded outputs are replaced with genuine ones.
 """
 
 import os
+import re
 
 import nbformat
 from nbformat.v4 import new_code_cell, new_markdown_cell, new_notebook, new_output
+
+# Jupyter tracebacks are coloured; the escape codes are noise in a prompt.
+_ANSI = re.compile(r"\x1b\[[0-9;]*[a-zA-Z]")
 
 
 def _cells(spec):
@@ -84,3 +88,67 @@ def execute_notebook(path, timeout=60):
         return (True, "notebook executed")
     except Exception as e:
         return (False, f"notebook execution failed: {type(e).__name__}: {e}")
+
+
+def _read(path):
+    with open(path, "r", encoding="utf-8") as f:
+        return nbformat.read(f, as_version=4)
+
+
+def notebook_errors(path):
+    """
+    Cells that raised on the last execution: [(index, source, error_text), ...].
+
+    execute_notebook runs with allow_errors=True, so a notebook that blew up in
+    cell 3 still writes successfully — the failure only shows up here, in the
+    recorded outputs.
+    """
+    try:
+        nb = _read(path)
+    except (OSError, ValueError, nbformat.reader.NotJSONError):
+        return []
+
+    found = []
+    for index, cell in enumerate(nb.cells):
+        if cell.get("cell_type") != "code":
+            continue
+        for output in cell.get("outputs") or []:
+            if output.get("output_type") != "error":
+                continue
+            text = "\n".join(output.get("traceback") or []) or (
+                f"{output.get('ename')}: {output.get('evalue')}"
+            )
+            found.append((index, cell.get("source") or "", _ANSI.sub("", text).strip()))
+            break
+    return found
+
+
+def notebook_code_cells(path):
+    """Every code cell in order, as [(index, source), ...]."""
+    try:
+        nb = _read(path)
+    except (OSError, ValueError, nbformat.reader.NotJSONError):
+        return []
+    return [
+        (i, c.get("source") or "")
+        for i, c in enumerate(nb.cells)
+        if c.get("cell_type") == "code"
+    ]
+
+
+def patch_notebook_cell(path, index, source):
+    """Swap one cell's source and drop its stale outputs. Returns True if written."""
+    try:
+        nb = _read(path)
+    except (OSError, ValueError, nbformat.reader.NotJSONError):
+        return False
+    if not 0 <= index < len(nb.cells):
+        return False
+
+    cell = nb.cells[index]
+    cell["source"] = source
+    cell["outputs"] = []
+    cell["execution_count"] = None
+    with open(path, "w", encoding="utf-8") as f:
+        nbformat.write(nb, f)
+    return True

@@ -3,16 +3,16 @@ Writes a generated solution to the user's chosen output folder.
 
 The output folder comes from config (settings panel), not a hardcoded path.
 Source files are written before documents so that, when local execution is
-enabled, a report's screenshots can show real captured output.
+enabled, the code can be run — and repaired if it fails — before the report
+that quotes it and screenshots its output is rendered.
 """
 
 import os
 import re
 
 import config
+import repair
 from artifacts import write_artifact
-from artifacts.notebook import execute_notebook
-from artifacts.runner import can_run, run_file
 
 _INVALID = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
 _WINDOWS_RESERVED = {
@@ -42,19 +42,31 @@ def _unique_dir(base_path):
     return base_path
 
 
-def _capture_real_output(target_dir, code_files, timeout):
-    """
-    Run the generated source files and return {filename: (command, output)}.
+def _normalize(text):
+    """Compare source ignoring trailing whitespace, which renderers vary on."""
+    return "\n".join(line.rstrip() for line in (text or "").strip().splitlines())
 
-    Only called when the user has enabled execution in settings.
+
+def _apply_repaired_source(artifact, repairs):
     """
-    captured = {}
-    for rel in code_files:
-        if not can_run(rel):
+    Update code blocks that quote a file the repair loop changed.
+
+    A report's code block and the source file come out of the same model reply,
+    so they start out identical. Once the file is fixed the report has to show
+    the fixed version, or it documents a program that never ran next to output
+    that came from a different one.
+    """
+    blocks = artifact.get("blocks")
+    if not isinstance(blocks, list) or not repairs:
+        return
+
+    fixed_for = {_normalize(before): after for before, after in repairs.values()}
+    for block in blocks:
+        if not isinstance(block, dict) or (block.get("type") or "").lower() != "code":
             continue
-        command, output, _ok = run_file(target_dir, rel.replace("/", os.sep), timeout)
-        captured[rel] = (command, output)
-    return captured
+        fixed = fixed_for.get(_normalize(block.get("text")))
+        if fixed:
+            block["text"] = fixed.rstrip("\n")
 
 
 def _apply_real_output(artifact, captured):
@@ -128,24 +140,32 @@ def save_solution(assignment_title, solution, cfg=None):
             notebooks.append(result)
 
     captured = {}
-    if cfg.get("run_code") and code_files:
-        timeout = int(cfg.get("run_timeout") or 20)
-        try:
-            captured = _capture_real_output(target_dir, code_files, timeout)
-        except Exception as e:
-            notes.append(f"Could not run generated code: {e}")
-        if captured:
-            notes.append(f"Captured real output from {len(captured)} file(s).")
-
+    repairs = {}
     if cfg.get("run_code"):
+        # The assignment title and summary give the model enough to know what a
+        # failing file was meant to do without resending the instructions.
+        context = " — ".join(
+            part for part in (assignment_title, solution.get("summary")) if part
+        )
+        if code_files:
+            try:
+                captured, repairs, run_notes = repair.run_and_repair(
+                    target_dir, code_files, cfg, context=context
+                )
+                notes.extend(run_notes)
+            except Exception as e:
+                notes.append(f"Could not run generated code: {e}")
+            if captured:
+                notes.append(f"Captured real output from {len(captured)} file(s).")
+
         for result in notebooks:
-            ok, message = execute_notebook(
-                result["path"], int(cfg.get("run_timeout") or 20) * 3
-            )
-            if not ok:
-                notes.append(message)
+            try:
+                notes.extend(repair.repair_notebook(result["path"], cfg, context=context))
+            except Exception as e:
+                notes.append(f"Could not run {result['filename']}: {e}")
 
     for index, artifact in documents:
+        _apply_repaired_source(artifact, repairs)
         if captured:
             _apply_real_output(artifact, captured)
         try:

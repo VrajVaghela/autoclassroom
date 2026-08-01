@@ -131,6 +131,40 @@ def _question_reply(number, name, code, aim):
     })
 
 
+BROKEN_ASSIGNMENT = """
+Lab 6: Broken Program
+
+Write a Python program that prints a greeting. Submit the code and a report
+containing the code listing and a screenshot of the output.
+"""
+
+BROKEN_CODE = "print(greeting_that_was_never_defined)\n"
+FIXED_CODE = "print('FIXED OUTPUT')\n"
+
+BROKEN_REPLY = json.dumps({
+    "summary": "A program that does not run.",
+    "language": "python",
+    "artifacts": [
+        {"kind": "code", "filename": "greet.py", "content": BROKEN_CODE},
+        {"kind": "docx", "filename": "lab6_report.docx", "title": "Lab 6", "blocks": [
+            {"type": "heading", "text": "Code", "level": 1},
+            {"type": "code", "text": BROKEN_CODE},
+            {"type": "screenshot", "command": "python greet.py",
+             "output": "PREDICTED OUTPUT", "caption": "Program output"},
+        ]},
+    ],
+})
+
+
+def repairing_model(system, user, **kwargs):
+    """Stub provider that writes code that crashes, then fixes it when asked."""
+    import repair
+
+    if system is repair.REPAIR_SYSTEM_PROMPT:
+        return f"```python\n{FIXED_CODE}```"
+    return BROKEN_REPLY
+
+
 def two_question_model(system, user, **kwargs):
     """Stub provider for the multi-question run: split first, then one per question."""
     import llm_generator
@@ -296,7 +330,47 @@ def main():
             server.get_assignment_details = original_details
             providers.complete = original_complete
 
-        print("\n8. Error handling")
+        print("\n8. Code that fails is repaired and the report follows")
+        original_details = server.get_assignment_details
+        original_complete = providers.complete
+        server.get_assignment_details = lambda c, w: ("Lab 6: Broken Program",
+                                                      BROKEN_ASSIGNMENT)
+        providers.complete = repairing_model
+        try:
+            settings = requests.post(f"{BASE}/settings", headers=HEAD, timeout=10,
+                                     json={"repair_attempts": 1})
+            check("repair_attempts applied",
+                  settings.status_code == 200
+                  and settings.json()["settings"]["repair_attempts"] == 1,
+                  settings.text[:200])
+
+            fix = requests.post(f"{BASE}/process_assignment", headers=HEAD, timeout=180,
+                                json={"courseId": "123", "courseWorkId": "999"})
+            check("repair run succeeded", fix.status_code == 200, fix.text[:300])
+            if fix.status_code == 200:
+                info = fix.json()
+                check("repair reported to the user",
+                      any("repaired" in n for n in info["notes"]), str(info["notes"]))
+
+                source = os.path.join(info["dir"], "greet.py")
+                if os.path.exists(source):
+                    with open(source, encoding="utf-8") as f:
+                        check("the saved file is the working one", f.read() == FIXED_CODE)
+
+                report = os.path.join(info["dir"], "lab6_report.docx")
+                if os.path.exists(report):
+                    with zipfile.ZipFile(report) as z:
+                        xml = z.read("word/document.xml").decode("utf-8", "ignore")
+                    check("report lists the repaired code", "FIXED OUTPUT" in xml)
+                    check("report no longer lists the broken code",
+                          "greeting_that_was_never_defined" not in xml)
+        finally:
+            server.get_assignment_details = original_details
+            providers.complete = original_complete
+            requests.post(f"{BASE}/settings", headers=HEAD, timeout=10,
+                          json={"repair_attempts": 2})
+
+        print("\n9. Error handling")
         bad = requests.post(f"{BASE}/process_assignment", headers=HEAD, timeout=10, json={})
         check("missing ids -> 400", bad.status_code == 400)
 
