@@ -106,7 +106,8 @@ Q2. Write a Python program that prints a reversed string.
 Submit a single lab report covering both questions.
 """
 
-SPLIT_REPLY = json.dumps({
+PLAN_REPLY = json.dumps({
+    "layout": "per_question",
     "report_style": "combined",
     "questions": [
         {"number": 1, "title": "Factorial", "instructions": "Print the factorial of 5."},
@@ -130,6 +131,48 @@ def _question_reply(number, name, code, aim):
         ],
     })
 
+
+NOTEBOOK_ASSIGNMENT = """
+Lab 7: Data Analysis
+
+1. Load the dataset and print how many rows it has.
+2. Print the mean of the first column.
+3. Print the largest value in the second column.
+
+Submit a single Colab notebook (.ipynb). Do not submit separate files.
+"""
+
+NOTEBOOK_PLAN_REPLY = json.dumps({
+    "layout": "single",
+    "report_style": "none",
+    "questions": [
+        {"number": 1, "title": "Load", "instructions": "Load the dataset."},
+        {"number": 2, "title": "Mean", "instructions": "Print the column mean."},
+        {"number": 3, "title": "Max", "instructions": "Print the largest value."},
+    ],
+})
+
+ONE_NOTEBOOK_REPLY = json.dumps({
+    "summary": "One notebook covering all three parts.",
+    "language": "python",
+    "artifacts": [
+        {
+            "kind": "notebook",
+            "filename": "lab7.ipynb",
+            "title": "Lab 7: Data Analysis",
+            "cells": [
+                {"type": "markdown", "source": "## 1. Load the data"},
+                {"type": "code", "source": "data = [[1, 2], [3, 8]]\nprint(len(data))",
+                 "output": "2\n"},
+                {"type": "markdown", "source": "## 2. Mean of the first column"},
+                {"type": "code", "source": "print(sum(r[0] for r in data) / len(data))",
+                 "output": "2.0\n"},
+                {"type": "markdown", "source": "## 3. Largest value in the second column"},
+                {"type": "code", "source": "print(max(r[1] for r in data))", "output": "8\n"},
+            ],
+        },
+    ],
+})
 
 BROKEN_ASSIGNMENT = """
 Lab 6: Broken Program
@@ -166,15 +209,29 @@ def repairing_model(system, user, **kwargs):
 
 
 def two_question_model(system, user, **kwargs):
-    """Stub provider for the multi-question run: split first, then one per question."""
+    """Stub provider for the multi-question run: plan first, then one per question."""
     import llm_generator
 
-    if system is llm_generator.SPLIT_SYSTEM_PROMPT:
-        return SPLIT_REPLY
+    if system is llm_generator.PLAN_SYSTEM_PROMPT:
+        return PLAN_REPLY
     if "question 2 of" in user:
         return _question_reply(2, "reverse", "print('dlrow olleh'[::-1])\n",
                                "To reverse a string.")
     return _question_reply(1, "factorial", "print(120)\n", "To compute 5!.")
+
+
+solve_calls = []
+
+
+def one_notebook_model(system, user, **kwargs):
+    """Stub provider for an assignment handed in as one notebook."""
+    import llm_generator
+
+    if system is llm_generator.PLAN_SYSTEM_PROMPT:
+        return NOTEBOOK_PLAN_REPLY
+    if system is llm_generator.SYSTEM_PROMPT:
+        solve_calls.append(user)
+    return ONE_NOTEBOOK_REPLY
 
 
 failures = []
@@ -330,7 +387,37 @@ def main():
             server.get_assignment_details = original_details
             providers.complete = original_complete
 
-        print("\n8. Code that fails is repaired and the report follows")
+        print("\n8. Assignment asking for one file -> one file, not one per question")
+        original_details = server.get_assignment_details
+        original_complete = providers.complete
+        server.get_assignment_details = lambda c, w: ("Lab 7: Data Analysis",
+                                                      NOTEBOOK_ASSIGNMENT)
+        providers.complete = one_notebook_model
+        solve_calls.clear()
+        try:
+            single = requests.post(f"{BASE}/process_assignment", headers=HEAD, timeout=180,
+                                   json={"courseId": "123", "courseWorkId": "321"})
+            check("single-deliverable run succeeded", single.status_code == 200,
+                  single.text[:300])
+            if single.status_code == 200:
+                info = single.json()
+                names = sorted(info["files"])
+                check("one notebook, no per-question files",
+                      [n for n in names if n.endswith(".ipynb")] == ["lab7.ipynb"], str(names))
+                check("nothing was prefixed q1_/q2_",
+                      not any(n.startswith("q") and n[1:2].isdigit() for n in names),
+                      str(names))
+                check("solved in a single model call", len(solve_calls) == 1,
+                      f"{len(solve_calls)} call(s)")
+                check("the call listed every question",
+                      solve_calls and "3 questions" in solve_calls[0])
+                check("all three questions reported", info.get("questions") == 3,
+                      str(info.get("questions")))
+        finally:
+            server.get_assignment_details = original_details
+            providers.complete = original_complete
+
+        print("\n9. Code that fails is repaired and the report follows")
         original_details = server.get_assignment_details
         original_complete = providers.complete
         server.get_assignment_details = lambda c, w: ("Lab 6: Broken Program",
@@ -370,7 +457,7 @@ def main():
             requests.post(f"{BASE}/settings", headers=HEAD, timeout=10,
                           json={"repair_attempts": 2})
 
-        print("\n9. Error handling")
+        print("\n10. Error handling")
         bad = requests.post(f"{BASE}/process_assignment", headers=HEAD, timeout=10, json={})
         check("missing ids -> 400", bad.status_code == 400)
 

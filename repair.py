@@ -61,6 +61,8 @@ file, function and class names the assignment asked for.
 depend on files that are not there — build any data it needs in the code.
 - Use only the standard library and packages the file already imports \
 successfully. If an import is what failed, rewrite that part without it.
+- Keep the file as plain as it already is. Do not add comments, extra prints, \
+docstrings, error handling or features while fixing it.
 - Change as little as possible. This is a fix, not a rewrite."""
 
 NOTEBOOK_REPAIR_SYSTEM_PROMPT = """You fix the one failing cell of a student's \
@@ -79,6 +81,8 @@ in a bare try/except, or hardcode the answer.
 not repeat their code, and do not rename anything later cells rely on.
 - Use only the standard library and packages the notebook already imports \
 successfully. Do not depend on data files that are not there.
+- Keep the cell as plain as it already is. Do not add comments, extra prints \
+or error handling while fixing it.
 - Change as little as possible. This is a fix, not a rewrite."""
 
 # Programs are run with stdin closed, so anything interactive dies here.

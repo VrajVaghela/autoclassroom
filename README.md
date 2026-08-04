@@ -11,10 +11,13 @@ folder you choose.
 - **Complete solutions, not just code** — produces the actual deliverables the
   assignment asks for: Jupyter notebooks (`.ipynb`), Word lab reports
   (`.docx`) with output screenshots, PDFs, and source files.
-- **A file per question** — the assignment is split into its questions and each
-  one is solved in its own call, so you get `q1_*.py`, `q2_*.py`, … instead of
-  everything crammed into one file. If the assignment wants a single write-up,
-  the per-question sections are merged into one report.
+- **The files the assignment asks for** — a task that says "submit a single
+  `.ipynb`" gets one notebook covering every question, while a lab sheet listing
+  independent programs gets `q1_*.py`, `q2_*.py`, … one per question. If the
+  assignment wants a single write-up, the per-question sections are merged into
+  one report.
+- **Code that looks like yours** — plain, direct solutions that answer exactly
+  what was asked, without heavy comments, banner prints or extra features.
 - **Bring your own AI** — Gemini, OpenAI, Anthropic Claude, OpenRouter, Groq,
   xAI Grok, or any OpenAI-compatible endpoint. Switch providers from the
   extension.
@@ -30,7 +33,7 @@ folder you choose.
 | `server.py` | Local Flask API the extension talks to |
 | `config.py` | Settings store (output folder, provider, API keys) |
 | `providers.py` | One `complete()` call across all supported AI providers |
-| `llm_generator.py` | Splits an assignment into questions and solves each one |
+| `llm_generator.py` | Works out what the assignment wants handed in, and generates it |
 | `file_manager.py` | Writes a solution into the chosen output folder |
 | `repair.py` | Runs the generated code and asks the AI to fix what fails |
 | `artifacts/` | Renderers for notebooks, Word/PDF reports, screenshots |

@@ -111,7 +111,8 @@ def test_generate_solution_rejects_empty_artifacts(monkeypatch):
         gen.generate_solution("Lab 1", "Do a thing.", cfg={})
 
 
-SPLIT = {
+TWO_QUESTIONS = {
+    "layout": "per_question",
     "report_style": "combined",
     "questions": [
         {"number": 1, "title": "Bubble sort", "instructions": "Write bubble sort."},
@@ -121,11 +122,11 @@ SPLIT = {
 
 
 def _fake_two_question_provider(calls=None):
-    """A provider that answers the split call, then one call per question."""
+    """A provider that answers the planning call, then one call per question."""
 
     def fake(system, user, **kwargs):
-        if system is gen.SPLIT_SYSTEM_PROMPT:
-            return json.dumps(SPLIT)
+        if system is gen.PLAN_SYSTEM_PROMPT:
+            return json.dumps(TWO_QUESTIONS)
         number = 2 if "question 2 of" in user else 1
         if calls is not None:
             calls.append(user)
@@ -174,8 +175,8 @@ def test_combined_report_is_merged_into_one_document(monkeypatch):
 
 def test_separate_report_style_keeps_one_document_per_question(monkeypatch):
     def fake(system, user, **kwargs):
-        if system is gen.SPLIT_SYSTEM_PROMPT:
-            return json.dumps(dict(SPLIT, report_style="separate"))
+        if system is gen.PLAN_SYSTEM_PROMPT:
+            return json.dumps(dict(TWO_QUESTIONS, report_style="separate"))
         number = 2 if "question 2 of" in user else 1
         return json.dumps({"artifacts": [
             {"kind": "docx", "filename": "report.docx",
@@ -189,8 +190,8 @@ def test_separate_report_style_keeps_one_document_per_question(monkeypatch):
 
 def test_one_failing_question_does_not_sink_the_others(monkeypatch):
     def fake(system, user, **kwargs):
-        if system is gen.SPLIT_SYSTEM_PROMPT:
-            return json.dumps(SPLIT)
+        if system is gen.PLAN_SYSTEM_PROMPT:
+            return json.dumps(TWO_QUESTIONS)
         if "question 2 of" in user:
             raise gen.providers.ProviderError("rate limited")
         return json.dumps({"artifacts": [
@@ -202,22 +203,23 @@ def test_one_failing_question_does_not_sink_the_others(monkeypatch):
     assert any("Question 2" in note and "rate limited" in note for note in out["notes"])
 
 
-def test_failed_split_falls_back_to_one_call(monkeypatch):
+def test_failed_plan_falls_back_to_one_call(monkeypatch):
     def fake(system, user, **kwargs):
-        if system is gen.SPLIT_SYSTEM_PROMPT:
+        if system is gen.PLAN_SYSTEM_PROMPT:
             raise gen.providers.ProviderError("model is down")
         return json.dumps(PLAN)
 
     monkeypatch.setattr(gen.providers, "complete", fake)
     out = gen.generate_solution("Lab 1", "Write a bubble sort.", cfg={})
     assert len(out["artifacts"]) == 2
-    assert any("Could not split" in note for note in out["notes"])
+    assert any("Could not work out" in note for note in out["notes"])
 
 
 def test_single_question_assignment_is_not_prefixed(monkeypatch):
     def fake(system, user, **kwargs):
-        if system is gen.SPLIT_SYSTEM_PROMPT:
-            return json.dumps({"questions": [{"number": 1, "title": "Only",
+        if system is gen.PLAN_SYSTEM_PROMPT:
+            return json.dumps({"layout": "per_question",
+                               "questions": [{"number": 1, "title": "Only",
                                               "instructions": "Do the thing."}]})
         return json.dumps(PLAN)
 
@@ -226,28 +228,133 @@ def test_single_question_assignment_is_not_prefixed(monkeypatch):
     assert [a["filename"] for a in out["artifacts"]] == ["main.py", "report.docx"]
 
 
-def test_split_skips_blank_questions_and_renumbers():
+NOTEBOOK_ASSIGNMENT = (
+    "Using the attached dataset, complete the following in a single notebook:\n"
+    "1. Load the data and describe it.\n"
+    "2. Plot the distribution of each column.\n"
+    "3. Train a linear regression model and report its score.\n"
+)
+
+NOTEBOOK_PLAN = {
+    "layout": "single",
+    "report_style": "none",
+    "questions": [
+        {"number": 1, "title": "Load", "instructions": "Load the data."},
+        {"number": 2, "title": "Plot", "instructions": "Plot the columns."},
+        {"number": 3, "title": "Model", "instructions": "Train a model."},
+    ],
+}
+
+ONE_NOTEBOOK = {
+    "summary": "Notebook covering all three parts.",
+    "language": "python",
+    "artifacts": [
+        {"kind": "notebook", "filename": "lab.ipynb", "title": "Lab",
+         "cells": [{"type": "code", "source": "print(1)", "output": "1\n"}]},
+    ],
+}
+
+
+def test_single_layout_produces_one_deliverable_for_every_question(monkeypatch):
+    solve_calls = []
+
+    def fake(system, user, **kwargs):
+        if system is gen.PLAN_SYSTEM_PROMPT:
+            return json.dumps(NOTEBOOK_PLAN)
+        solve_calls.append(user)
+        return json.dumps(ONE_NOTEBOOK)
+
+    monkeypatch.setattr(gen.providers, "complete", fake)
+    out = gen.generate_solution("DS Lab 2", NOTEBOOK_ASSIGNMENT, cfg={})
+
+    # One call, one file, no q1_/q2_ prefixes.
+    assert len(solve_calls) == 1
+    assert [a["filename"] for a in out["artifacts"]] == ["lab.ipynb"]
+    assert out["questions"] == 3
+
+
+def test_single_layout_call_is_told_about_every_question(monkeypatch):
+    seen = {}
+
+    def fake(system, user, **kwargs):
+        if system is gen.PLAN_SYSTEM_PROMPT:
+            return json.dumps(NOTEBOOK_PLAN)
+        seen["user"] = user
+        return json.dumps(ONE_NOTEBOOK)
+
+    monkeypatch.setattr(gen.providers, "complete", fake)
+    gen.generate_solution("DS Lab 2", NOTEBOOK_ASSIGNMENT, cfg={})
+
+    assert "3 questions" in seen["user"]
+    assert "Plot" in seen["user"]
+    assert "one file per question" in seen["user"]
+
+
+def test_single_layout_is_not_re_split_when_questions_are_numbered(monkeypatch):
+    plans = []
+
+    def fake(system, user, **kwargs):
+        if system is gen.PLAN_SYSTEM_PROMPT:
+            plans.append(user)
+            return json.dumps(dict(NOTEBOOK_PLAN, questions=NOTEBOOK_PLAN["questions"][:1]))
+        return json.dumps(ONE_NOTEBOOK)
+
+    monkeypatch.setattr(gen.providers, "complete", fake)
+    gen.generate_solution("DS Lab 2", NOTEBOOK_ASSIGNMENT, cfg={})
+    assert len(plans) == 1  # no "you missed some questions" retry
+
+
+def test_single_layout_falls_back_to_per_question_when_one_call_fails(monkeypatch):
+    def fake(system, user, **kwargs):
+        if system is gen.PLAN_SYSTEM_PROMPT:
+            return json.dumps(NOTEBOOK_PLAN)
+        if "This is question" not in user:  # the one-call attempt
+            return "I could not fit that into one reply."
+        return json.dumps({"artifacts": [
+            {"kind": "code", "filename": "main.py", "content": "x=1"}]})
+
+    monkeypatch.setattr(gen.providers, "complete", fake)
+    out = gen.generate_solution("DS Lab 2", NOTEBOOK_ASSIGNMENT, cfg={})
+
+    assert [a["filename"] for a in out["artifacts"]] == [
+        "q1_main.py", "q2_main.py", "q3_main.py"]
+    assert any("file per question instead" in note for note in out["notes"])
+
+
+def test_plan_defaults_to_a_single_deliverable(monkeypatch):
+    monkeypatch.setattr(gen.providers, "complete",
+                        lambda *a, **k: json.dumps({"questions": []}))
+    assert gen.plan_assignment("Lab", "text", cfg={})[2] == "single"
+
+
+def test_plan_rejects_an_unknown_layout(monkeypatch):
+    monkeypatch.setattr(gen.providers, "complete",
+                        lambda *a, **k: json.dumps({"layout": "whatever"}))
+    assert gen.plan_assignment("Lab", "text", cfg={})[2] == "single"
+
+
+def test_plan_skips_blank_questions_and_renumbers():
     parsed = {"questions": [{"title": "a", "instructions": "first"},
                             {"title": "empty", "instructions": "  "},
                             {"title": "b", "instructions": "second"}]}
-    assert [q["number"] for q in _split_from(parsed)] == [1, 2]
-    assert [q["title"] for q in _split_from(parsed)] == ["a", "b"]
+    assert [q["number"] for q in _plan_from(parsed)] == [1, 2]
+    assert [q["title"] for q in _plan_from(parsed)] == ["a", "b"]
 
 
-def _split_from(parsed):
-    """Run split_questions against a canned reply."""
+def _plan_from(parsed):
+    """Run plan_assignment against a canned reply."""
     original = gen.providers.complete
     gen.providers.complete = lambda *a, **k: json.dumps(parsed)
     try:
-        return gen.split_questions("Lab", "text", cfg={})[0]
+        return gen.plan_assignment("Lab", "text", cfg={})[0]
     finally:
         gen.providers.complete = original
 
 
-def test_split_caps_runaway_question_lists():
+def test_plan_caps_runaway_question_lists():
     parsed = {"questions": [{"title": f"q{i}", "instructions": f"do {i}"}
                             for i in range(gen.MAX_QUESTIONS + 10)]}
-    assert len(_split_from(parsed)) == gen.MAX_QUESTIONS
+    assert len(_plan_from(parsed)) == gen.MAX_QUESTIONS
 
 
 FOUR_LISTED = (
@@ -275,14 +382,16 @@ def test_under_split_is_retried_with_a_hint(monkeypatch):
     prompts = []
 
     def fake(system, user, **kwargs):
-        if system is gen.SPLIT_SYSTEM_PROMPT:
+        if system is gen.PLAN_SYSTEM_PROMPT:
             prompts.append(user)
             if len(prompts) == 1:  # first try: lumps everything into one
-                return json.dumps({"questions": [
+                return json.dumps({"layout": "per_question", "questions": [
                     {"title": "All of it", "instructions": "Do all four programs."}]})
-            return json.dumps({"report_style": "none", "questions": [
-                {"title": f"Program {i}", "instructions": f"Write program {i}."}
-                for i in range(1, 5)]})
+            return json.dumps({"layout": "per_question", "report_style": "none",
+                               "questions": [
+                                   {"title": f"Program {i}",
+                                    "instructions": f"Write program {i}."}
+                                   for i in range(1, 5)]})
         return json.dumps({"artifacts": [
             {"kind": "code", "filename": "main.py", "content": "x=1"}]})
 
@@ -298,8 +407,8 @@ def test_under_split_is_retried_with_a_hint(monkeypatch):
 
 def test_stubborn_single_split_is_reported(monkeypatch):
     def fake(system, user, **kwargs):
-        if system is gen.SPLIT_SYSTEM_PROMPT:
-            return json.dumps({"questions": [
+        if system is gen.PLAN_SYSTEM_PROMPT:
+            return json.dumps({"layout": "per_question", "questions": [
                 {"title": "All of it", "instructions": "Do all four programs."}]})
         return json.dumps(PLAN)
 
@@ -312,11 +421,11 @@ def test_retry_failure_keeps_the_first_split(monkeypatch):
     calls = []
 
     def fake(system, user, **kwargs):
-        if system is gen.SPLIT_SYSTEM_PROMPT:
+        if system is gen.PLAN_SYSTEM_PROMPT:
             calls.append(user)
             if len(calls) == 2:
                 raise gen.providers.ProviderError("rate limited")
-            return json.dumps({"questions": [
+            return json.dumps({"layout": "per_question", "questions": [
                 {"title": "A", "instructions": "Do A."},
                 {"title": "B", "instructions": "Do B."}]})
         return json.dumps({"artifacts": [

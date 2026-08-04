@@ -1,16 +1,19 @@
 """
-Turns assignment instructions into a complete set of deliverables.
+Turns assignment instructions into the deliverables the assignment asks for.
 
-An assignment usually holds several questions, and each one is its own
-deliverable, so generation runs in two passes: split the instructions into
-questions, then solve each question in its own model call and namespace its
-files (q1_*, q2_*, ...). One call per question also keeps a long assignment
-from being cut off by the reply token limit.
+Generation runs in two passes. The first works out what has to be handed in —
+the form (a notebook, a Word report with output screenshots, a PDF, plain source
+files) and, just as importantly, how many files: one assignment that says
+"submit a single .ipynb" is one deliverable however many questions it contains,
+while a lab sheet listing ten independent programs is ten.
 
-The model is asked to decide *what* the assignment wants handed in — a
-notebook, a Word report with output screenshots, a PDF, plain source files, or
-several of these — and to produce the full contents of each. This module owns
-the prompts and the JSON parsing; artifacts/ owns turning the result into files.
+The second pass produces the contents. An assignment handed in as one file is
+written in a single call. One that wants a file per question is solved a
+question at a time, with each question's files namespaced (q1_*, q2_*, ...) —
+which also keeps a long assignment from being cut off by the reply token limit.
+
+This module owns the prompts and the JSON parsing; artifacts/ owns turning the
+result into files.
 """
 
 import json
@@ -76,14 +79,13 @@ Reply with ONLY a JSON object in exactly this shape, and no other text:
 }
 
 Rules:
-- ONE FILE PER QUESTION, ALWAYS. If the assignment contains more than one
-  question, problem, exercise or program, emit a separate "code" artifact for
-  each one — q1_<name>.py, q2_<name>.py, and so on (use the assignment's own
-  filenames when it gives them). This is not optional, and it applies even when
-  the questions are tiny or closely related.
-- Never put two questions in one file: no single file with all the answers
-  separated by comments, no "menu-driven" program that runs each question from a
-  choice, no one file that calls every question's function.
+- Hand in exactly what the assignment asks for, and nothing more. When the
+  instructions name the file(s) to submit — "a single .ipynb", "one report",
+  "main.py" — produce those and only those, however many questions the
+  assignment contains.
+- When no file is named, use one file for the whole assignment if its parts
+  belong together (a notebook, an analysis, a write-up), and one file per
+  program when it lists programs that stand on their own.
 - "pdf" artifacts use the same "blocks" structure as "docx".
 - A "screenshot" block is rendered as a terminal-window image. Put the program's
   real expected console output in "output" — this is how the report shows results.
@@ -94,18 +96,33 @@ Rules:
 - Use the assignment's required language, filenames and function/class names when
   it specifies them.
 - Output MUST be valid JSON: escape newlines inside strings as \\n and quotes as \\".
+
+Write the code the way a student would:
+- Answer exactly what is asked. No extra features, no menu of options, no
+  command-line arguments, no configuration, and no error handling the question
+  did not ask for.
+- Take the plain, obvious approach over the clever or general one: simple loops,
+  ordinary variable names, the libraries the course actually uses.
+- Barely comment. A short comment only where the logic is genuinely unclear —
+  no docstring on every function, no banner comments, no comments restating
+  what the line below already says.
+- Print only what the question asks to be printed. No decorative separators, no
+  "=== Question 1 ===" headers, no progress or status messages, no emoji.
+- Keep it short. A working answer a classmate could have typed beats a polished
+  one.
 """
 
-SPLIT_SYSTEM_PROMPT = """You split a student's assignment into the separate \
-questions it contains, so each one can be solved and handed in as its own file.
+PLAN_SYSTEM_PROMPT = """You read a student's assignment and work out what has \
+to be handed in, so the solution can be produced in the right shape.
 
-You will be given an assignment's title and its full instructions. Identify \
-every distinct question, problem, task, exercise or program the student has to \
-produce.
+You will be given an assignment's title and its full instructions. Decide \
+whether the assignment is handed in as one deliverable or as one deliverable \
+per question, and list the questions it contains.
 
 Reply with ONLY a JSON object in exactly this shape, and no other text:
 
 {
+  "layout": "single",
   "report_style": "combined",
   "questions": [
     {
@@ -118,17 +135,25 @@ constraints or setup it needs to be solved on its own"
 }
 
 Rules:
-- SPLIT BY DEFAULT. Each question becomes its own file, so returning one entry
-  for an assignment that really holds several is the worst possible answer.
-  Return a single entry ONLY when the whole assignment is one single program.
-- One entry per question the student must hand in. Treat each of these as its
-  own question, whether or not the assignment numbers them:
+- "layout" is "single" when everything the student submits belongs in one set of
+  files, and "per_question" when each question has to be handed in as its own
+  file. Choose "single" when:
+    * the instructions name one thing to submit ("submit a single .ipynb", "one
+      report", "a single program", "upload main.py")
+    * it is a notebook, data-analysis, machine-learning or write-up task
+    * the questions share data, a dataset or setup, or build on each other
+  Choose "per_question" when:
+    * the instructions ask for a separate program, file or script per question
+    * it lists programs or practicals that each stand alone, with no single
+      named deliverable
+  When it is genuinely unclear, choose "single".
+- List every distinct question the assignment contains, whatever the layout.
+  Treat each of these as its own question, whether or not it is numbered:
     * a numbered or lettered item ("Q1.", "2.", "(iii)", "Program 4", "Task B")
     * each separate "Write a program to ..." / "Implement ..." / "Create ..."
       sentence or bullet
     * each row of a table of programs, and each practical/experiment in a list
-- Sub-parts of one question (a, b, c) stay together in that question unless each
-  sub-part is clearly its own standalone program.
+- Sub-parts of one question (a, b, c) stay together in that question.
 - Never merge two questions into one entry, and never invent questions that the
   instructions do not ask for.
 - Keep the original wording of each question, and copy in any shared context
@@ -273,13 +298,16 @@ def _legacy_artifacts(parsed):
     return artifacts
 
 
-def split_questions(assignment_title, instructions, cfg=None, hint=None):
+def plan_assignment(assignment_title, instructions, cfg=None, hint=None):
     """
-    Break an assignment into its individual questions.
+    Work out what the assignment wants handed in.
 
-    Returns (questions, report_style) where questions is a list of
-    {"number": int, "title": str, "instructions": str}. Returns an empty list
-    when the split fails — the caller then treats the assignment as one task.
+    Returns (questions, report_style, layout). questions is a list of
+    {"number": int, "title": str, "instructions": str}; layout is "single" when
+    the whole assignment is one deliverable and "per_question" when each
+    question is handed in as its own file. Returns an empty question list when
+    the plan comes back unusable — the caller then treats the assignment as one
+    task.
     """
     cfg = cfg if cfg is not None else config.load()
 
@@ -288,11 +316,15 @@ def split_questions(assignment_title, instructions, cfg=None, hint=None):
         + (f"{hint}\n\n" if hint else "")
         + f"Assignment instructions and attached material:\n\n{instructions}"
     )
-    parsed = _extract_json(providers.complete(SPLIT_SYSTEM_PROMPT, user_prompt, cfg=cfg))
+    parsed = _extract_json(providers.complete(PLAN_SYSTEM_PROMPT, user_prompt, cfg=cfg))
 
     report_style = (parsed.get("report_style") or "combined").strip().lower()
     if report_style not in ("combined", "separate", "none"):
         report_style = "combined"
+
+    layout = (parsed.get("layout") or "single").strip().lower()
+    if layout not in ("single", "per_question"):
+        layout = "single"
 
     questions = []
     for item in parsed.get("questions") or []:
@@ -309,7 +341,7 @@ def split_questions(assignment_title, instructions, cfg=None, hint=None):
         if len(questions) >= MAX_QUESTIONS:
             break
 
-    return questions, report_style
+    return questions, report_style, layout
 
 
 def _prefix_filename(filename, number):
@@ -335,6 +367,9 @@ def _solve_question(assignment_title, question, total, context, report_style, cf
         f"This is question {number} of {total} in the assignment. Produce the "
         f"deliverables for THIS question only — the other questions are being "
         f"handled by separate calls, so do not solve or mention them.",
+        f"This assignment is handed in as one file per question, so emit a "
+        f"single code file for this question unless the assignment asks for "
+        f"more (plus any write-up it asks for).",
         f'Name every file you emit with the prefix "q{number}_" '
         f'(for example q{number}_main.py) unless the assignment specifies exact '
         f"filenames, in which case use the names it gives.",
@@ -480,11 +515,31 @@ def _safe_solve(solve, question):
         return None, f"{type(e).__name__}: {e}"
 
 
-def _generate_whole(assignment_title, body, cfg):
-    """Single call for the whole assignment — used when there is one question."""
+def _generate_whole(assignment_title, body, cfg, questions=()):
+    """
+    One call for the whole assignment, producing the file(s) it asks for.
+
+    Used whenever the assignment is handed in as one deliverable, however many
+    questions it contains — a single notebook, one report, one program. The
+    questions are passed in only so the prompt can list them and the answer
+    covers every one.
+    """
+    guidance = ""
+    if len(questions) > 1:
+        listing = "\n".join(f"  {q['number']}. {q['title']}" for q in questions)
+        guidance = (
+            f"This assignment contains {len(questions)} questions:\n{listing}\n\n"
+            f"It is handed in as one deliverable, so answer all of them in the "
+            f"file(s) the instructions ask for — the same notebook, report or "
+            f"program — instead of one file per question. Inside that "
+            f"deliverable, make it clear which answer belongs to which "
+            f"question.\n\n"
+        )
+
     user_prompt = (
         f"Assignment title: {assignment_title}\n\n"
-        f"Assignment instructions and attached material:\n\n{body}"
+        + guidance
+        + f"Assignment instructions and attached material:\n\n{body}"
     )
 
     raw = providers.complete(SYSTEM_PROMPT, user_prompt, cfg=cfg)
@@ -498,7 +553,7 @@ def _generate_whole(assignment_title, body, cfg):
         "summary": (parsed.get("summary") or "").strip(),
         "language": (parsed.get("language") or "python").strip().lower(),
         "artifacts": artifacts,
-        "questions": 1,
+        "questions": max(len(questions), 1),
         "notes": [],
     }
 
@@ -507,9 +562,10 @@ def generate_solution(assignment_title, instructions, cfg=None):
     """
     Ask the configured model for the full set of deliverables.
 
-    Splits the assignment into questions first and solves each one separately,
-    so every question gets its own file(s). Falls back to a single call when the
-    assignment holds one task or the split fails.
+    Works out what the assignment wants handed in first. An assignment handed in
+    as one deliverable is written in a single call; one that wants a file per
+    question is solved a question at a time. Falls back to a single call when
+    the planning step fails.
 
     Returns {"summary", "language", "artifacts", "questions", "notes"}.
     Raises providers.ProviderError or ValueError with a user-facing message.
@@ -523,44 +579,64 @@ def generate_solution(assignment_title, instructions, cfg=None):
     if len(body) > MAX_INSTRUCTION_CHARS:
         body = body[:MAX_INSTRUCTION_CHARS] + "\n\n[instructions truncated]"
 
-    split_note = None
+    plan_note = None
     try:
-        questions, report_style = split_questions(assignment_title, body, cfg=cfg)
+        questions, report_style, layout = plan_assignment(assignment_title, body, cfg=cfg)
 
-        # The model sometimes hands back one lump for an assignment that plainly
-        # lists several questions. Ask once more, pointing at what we counted.
+        # When each question is its own file, missing one costs the student a
+        # deliverable, so an under-split is worth a second call. An assignment
+        # handed in as one file does not care how the questions were counted.
         expected = count_question_markers(body)
-        if expected > max(len(questions), 1):
+        if layout == "per_question" and expected > max(len(questions), 1):
             hint = (
                 f"This assignment appears to contain about {expected} separate "
                 f"questions. Split it into every question it lists — one entry "
                 f"per question — and do not return fewer than the assignment has."
             )
             try:
-                retry, retry_style = split_questions(
-                    assignment_title, body, cfg=cfg, hint=hint
-                )
+                retry = plan_assignment(assignment_title, body, cfg=cfg, hint=hint)
             except (providers.ProviderError, ValueError):
-                retry, retry_style = [], report_style  # keep the first split
-            if len(retry) > len(questions):
-                questions, report_style = retry, retry_style
+                retry = None  # keep the first plan
+            if retry and len(retry[0]) > len(questions):
+                questions, report_style, layout = retry
             elif len(questions) <= 1:
-                split_note = (
+                plan_note = (
                     f"Found about {expected} question(s) in the instructions, but the "
                     f"model kept the assignment as one task."
                 )
     except (providers.ProviderError, ValueError) as e:
-        questions, report_style = [], "combined"
-        split_note = f"Could not split the assignment into questions ({e}); solved it as one task."
+        questions, report_style, layout = [], "combined", "single"
+        plan_note = (
+            f"Could not work out what the assignment wants handed in ({e}); "
+            f"solved it as one task."
+        )
 
-    if len(questions) > 1:
-        print(f"Assignment has {len(questions)} question(s); generating one at a time.")
+    if layout == "per_question" and len(questions) > 1:
+        print(f"Assignment wants a file per question; generating {len(questions)} separately.")
         solution = _generate_per_question(
             assignment_title, body, questions, report_style, cfg
         )
     else:
-        solution = _generate_whole(assignment_title, body, cfg)
+        if len(questions) > 1:
+            print(f"Assignment is one deliverable covering {len(questions)} question(s).")
+        try:
+            solution = _generate_whole(assignment_title, body, cfg, questions)
+        except (providers.ProviderError, ValueError) as e:
+            # One reply covering every question can run past the model's output
+            # limit and come back truncated. Rather than lose the assignment,
+            # fall back to a call per question and hand in separate files.
+            if len(questions) <= 1:
+                raise
+            print(f"Single-call generation failed ({e}); falling back to one call per question.")
+            solution = _generate_per_question(
+                assignment_title, body, questions, report_style, cfg
+            )
+            solution["notes"].insert(
+                0,
+                f"The assignment asked for one deliverable, but generating it in "
+                f"one piece failed ({e}); produced a file per question instead.",
+            )
 
-    if split_note:
-        solution["notes"].insert(0, split_note)
+    if plan_note:
+        solution["notes"].insert(0, plan_note)
     return solution
