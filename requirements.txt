@@ -3,6 +3,8 @@ flask
 flask-cors
 requests
 python-dotenv
+gunicorn>=21.2.0
+waitress>=3.0.0
 
 # Google Classroom + Drive
 google-api-python-client

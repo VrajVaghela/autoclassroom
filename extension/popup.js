@@ -1,38 +1,26 @@
 "use strict";
 
-const SERVER = "http://127.0.0.1:5000";
+let SERVER = "http://127.0.0.1:5000";
 const CLIENT_HEADER = { "X-AutoClassroom-Client": "extension" };
 
-// Server state for the currently selected provider, so the settings form can
-// show masked keys and per-provider models without refetching.
-let settings = null;
-// Keys the user typed this session, per provider. Never pre-filled from the
-// server (it only ever sends masked values).
-const typedKeys = {};
-
-const $ = (id) => document.getElementById(id);
-
-function show(el, kind, text, busy = false) {
-  el.className = `status ${kind}`;
-  el.textContent = "";
-  if (busy) {
-    const spinner = document.createElement("span");
-    spinner.className = "spin";
-    el.appendChild(spinner);
+async function getStoredServerUrl() {
+  if (typeof chrome !== "undefined" && chrome.storage && chrome.storage.local) {
+    return new Promise((resolve) => {
+      chrome.storage.local.get("server_url", (res) => {
+        resolve(res && res.server_url ? res.server_url.trim().replace(/\/+$/, "") : "http://127.0.0.1:5000");
+      });
+    });
   }
-  el.appendChild(document.createTextNode(text));
-}
-
-function clear(el) {
-  el.className = "status";
-  el.textContent = "";
+  return "http://127.0.0.1:5000";
 }
 
 async function api(path, options = {}) {
+  SERVER = await getStoredServerUrl();
   const response = await fetch(SERVER + path, {
     ...options,
     headers: { "Content-Type": "application/json", ...CLIENT_HEADER, ...(options.headers || {}) },
   });
+
   let body = null;
   try {
     body = await response.json();
@@ -160,6 +148,10 @@ function renderRunFields() {
 
 async function loadSettings() {
   const status = $("settingsStatus");
+  if ($("serverUrlInput")) {
+    const currentUrl = await getStoredServerUrl();
+    $("serverUrlInput").value = currentUrl;
+  }
   try {
     settings = await api("/settings");
   } catch (error) {
@@ -213,6 +205,13 @@ async function saveSettings() {
   const button = $("saveBtn");
   button.disabled = true;
   show(status, "info", "Saving…", true);
+
+  if ($("serverUrlInput") && typeof chrome !== "undefined" && chrome.storage && chrome.storage.local) {
+    const customServer = $("serverUrlInput").value.trim();
+    if (customServer) {
+      await chrome.storage.local.set({ server_url: customServer });
+    }
+  }
 
   try {
     const data = await api("/settings", {

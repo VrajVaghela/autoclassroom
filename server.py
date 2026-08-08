@@ -31,10 +31,20 @@ app = Flask(__name__)
 
 # Only the extension may talk to this server. Chrome sends
 # "Origin: chrome-extension://<id>" from popup/options pages.
+# In cloud environments, allow extension origins or explicit ALLOWED_ORIGINS env var.
+allowed_origins = os.environ.get("ALLOWED_ORIGINS")
+if allowed_origins:
+    origins_list = [o.strip() for o in allowed_origins.split(",")]
+else:
+    origins_list = [
+        re.compile(r"^chrome-extension://.*$"),
+        re.compile(r"^moz-extension://.*$"),
+        re.compile(r"^http://(127\.0\.0\.1|localhost):[0-9]+$")
+    ]
+
 CORS(
     app,
-    origins=[re.compile(r"^chrome-extension://[a-z]{32}$"),
-             re.compile(r"^moz-extension://[0-9a-f-]{36}$")],
+    origins=origins_list,
     allow_headers=["Content-Type", "X-AutoClassroom-Client"],
     methods=["GET", "POST", "OPTIONS"],
     max_age=600,
@@ -240,7 +250,9 @@ def process_assignment():
 
 if __name__ == "__main__":
     cfg = config.load()
-    print("AutoClassroom server -> http://127.0.0.1:5000")
+    port = int(os.environ.get("PORT", 5000))
+    host = os.environ.get("HOST", "0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
+    print(f"AutoClassroom server -> http://{host}:{port}")
     print(f"  provider : {config.PROVIDERS[cfg['provider']][0]} "
           f"({config.get_model(cfg['provider'], cfg)})")
     print(f"  api key  : {'set' if config.get_api_key(cfg['provider'], cfg) else 'MISSING'}")
@@ -249,4 +261,4 @@ if __name__ == "__main__":
         attempts = repair.attempts_for(cfg)
         print(f"  run code : on, {'no repairs' if not attempts else f'repair x{attempts}'}")
     # use_reloader=False keeps the Google OAuth flow from firing twice in dev.
-    app.run(host="127.0.0.1", port=5000, debug=True, use_reloader=False)
+    app.run(host=host, port=port, debug=False, use_reloader=False)
