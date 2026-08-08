@@ -17,7 +17,7 @@ import subprocess
 import sys
 import threading
 
-from flask import Flask, jsonify, request
+from flask import Flask, jsonify, request, send_file
 from flask_cors import CORS
 
 import config
@@ -185,6 +185,47 @@ def browse_folder():
         return jsonify({"cancelled": True}), 200
 
     return jsonify({"path": os.path.abspath(path)})
+
+
+@app.route("/download_file", methods=["GET"])
+def download_file():
+    """Download a single generated solution file."""
+    target_dir = request.args.get("dir")
+    filename = request.args.get("filename")
+    if not target_dir or not filename:
+        return jsonify({"error": "dir and filename parameters are required."}), 400
+
+    abs_dir = os.path.abspath(target_dir)
+    abs_file = os.path.abspath(os.path.join(abs_dir, filename))
+
+    if not abs_file.startswith(abs_dir) or not os.path.isfile(abs_file):
+        return jsonify({"error": "File not found."}), 404
+
+    return send_file(abs_file, as_attachment=True, download_name=filename)
+
+
+@app.route("/download_zip", methods=["GET"])
+def download_zip():
+    """Download all solution files in a directory as a .zip archive."""
+    import io, zipfile
+    target_dir = request.args.get("dir")
+    if not target_dir:
+        return jsonify({"error": "dir parameter is required."}), 400
+
+    abs_dir = os.path.abspath(target_dir)
+    if not os.path.isdir(abs_dir):
+        return jsonify({"error": "Directory not found."}), 404
+
+    memory_file = io.BytesIO()
+    folder_name = os.path.basename(abs_dir) or "solution"
+    with zipfile.ZipFile(memory_file, "w", zipfile.ZIP_DEFLATED) as zf:
+        for root, dirs, files in os.walk(abs_dir):
+            for file in files:
+                full_path = os.path.join(root, file)
+                rel_path = os.path.relpath(full_path, abs_dir)
+                zf.write(full_path, rel_path)
+    memory_file.seek(0)
+    return send_file(memory_file, mimetype="application/zip", as_attachment=True, download_name=f"{folder_name}.zip")
 
 
 @app.route("/process_assignment", methods=["POST"])

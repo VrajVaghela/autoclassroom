@@ -5,7 +5,8 @@
   "description": "Generate and save complete Google Classroom assignment solutions with your choice of AI.",
   "permissions": [
     "activeTab",
-    "storage"
+    "storage",
+    "downloads"
   ],
   "icons": {
     "16": "icons/icon16.png",

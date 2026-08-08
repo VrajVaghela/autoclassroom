@@ -82,6 +82,54 @@ function currentTab() {
   });
 }
 
+async function downloadFileFromApi(dirPath, filename) {
+  const serverUrl = await getStoredServerUrl();
+  const url = `${serverUrl}/download_file?dir=${encodeURIComponent(dirPath)}&filename=${encodeURIComponent(filename)}`;
+  const response = await fetch(url, { headers: CLIENT_HEADER });
+  if (!response.ok) throw new Error(`Download failed (HTTP ${response.status})`);
+  const blob = await response.blob();
+  const blobUrl = URL.createObjectURL(blob);
+  
+  if (typeof chrome !== "undefined" && chrome.downloads && chrome.downloads.download) {
+    chrome.downloads.download({
+      url: blobUrl,
+      filename: filename,
+      saveAs: false,
+    });
+  } else {
+    const a = document.createElement("a");
+    a.href = blobUrl;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+  }
+}
+
+async function downloadZipFromApi(dirPath, zipName) {
+  const serverUrl = await getStoredServerUrl();
+  const url = `${serverUrl}/download_zip?dir=${encodeURIComponent(dirPath)}`;
+  const response = await fetch(url, { headers: CLIENT_HEADER });
+  if (!response.ok) throw new Error(`Zip download failed (HTTP ${response.status})`);
+  const blob = await response.blob();
+  const blobUrl = URL.createObjectURL(blob);
+  
+  if (typeof chrome !== "undefined" && chrome.downloads && chrome.downloads.download) {
+    chrome.downloads.download({
+      url: blobUrl,
+      filename: zipName || "solution.zip",
+      saveAs: false,
+    });
+  } else {
+    const a = document.createElement("a");
+    a.href = blobUrl;
+    a.download = zipName || "solution.zip";
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+  }
+}
+
 async function runAssignment() {
   const status = $("status");
   const files = $("fileList");
@@ -107,14 +155,50 @@ async function runAssignment() {
     });
 
     const notes = (data.notes || []).join(" ");
-    show(status, "ok", `${data.message}${notes ? " " + notes : ""}`);
+    show(status, "ok", `Solution generated! Downloading files to your machine… ${notes}`);
 
-    for (const name of data.files || []) {
+    const fileList = data.files || [];
+    for (const name of fileList) {
       const item = document.createElement("li");
-      item.textContent = name;
+      item.className = "file-item";
+
+      const nameSpan = document.createElement("span");
+      nameSpan.textContent = name;
+      item.appendChild(nameSpan);
+
+      const dlBtn = document.createElement("button");
+      dlBtn.className = "dl-btn";
+      dlBtn.textContent = "⬇️ Save";
+      dlBtn.onclick = () => downloadFileFromApi(data.dir, name);
+      item.appendChild(dlBtn);
+
       files.appendChild(item);
+
+      // Auto-trigger browser download
+      try {
+        downloadFileFromApi(data.dir, name);
+      } catch (err) {
+        console.error("Auto-download failed:", err);
+      }
     }
-    files.hidden = !(data.files || []).length;
+
+    if (fileList.length > 1) {
+      const zipItem = document.createElement("li");
+      zipItem.className = "file-item";
+      zipItem.style.border = "none";
+      zipItem.style.marginTop = "6px";
+
+      const zipBtn = document.createElement("button");
+      zipBtn.className = "primary";
+      zipBtn.style.padding = "4px 10px";
+      zipBtn.style.fontSize = "11px";
+      zipBtn.textContent = "📦 Download All (.zip)";
+      zipBtn.onclick = () => downloadZipFromApi(data.dir, `${data.title || "solution"}.zip`);
+      zipItem.appendChild(zipBtn);
+      files.appendChild(zipItem);
+    }
+
+    files.hidden = !fileList.length;
   } catch (error) {
     show(status, "err", serverDownMessage(error));
   } finally {
@@ -177,7 +261,16 @@ async function loadSettings() {
     return;
   }
 
-  $("outputDir").value = settings.output_dir || "";
+  const isRemote = SERVER.startsWith("https://");
+  if (isRemote) {
+    $("outputDir").value = "Downloads Folder (Browser)";
+    $("outputDir").disabled = true;
+    $("browseBtn").disabled = true;
+  } else {
+    $("outputDir").value = settings.output_dir || "";
+    $("outputDir").disabled = false;
+    $("browseBtn").disabled = false;
+  }
   $("baseUrlInput").value = settings.custom_base_url || "";
   $("runCode").checked = Boolean(settings.run_code);
   $("repairAttempts").value = settings.repair_attempts ?? 2;
