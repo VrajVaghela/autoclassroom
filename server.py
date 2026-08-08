@@ -23,7 +23,7 @@ from flask_cors import CORS
 import config
 import providers
 import repair
-from classroom_api import get_assignment_details
+from classroom_api import authenticate_google, check_auth_status, get_assignment_details
 from file_manager import save_solution
 from llm_generator import generate_solution
 
@@ -98,7 +98,25 @@ def health():
         "model": config.get_model(provider, cfg),
         "has_key": bool(config.get_api_key(provider, cfg)),
         "output_dir": cfg["output_dir"],
+        "google_auth": check_auth_status(),
     })
+
+
+@app.route("/auth/status", methods=["GET"])
+def get_auth_status():
+    return jsonify(check_auth_status())
+
+
+@app.route("/auth/login", methods=["POST"])
+def auth_login():
+    try:
+        authenticate_google()
+        return jsonify({"success": True, "message": "Successfully authenticated with Google Classroom!", "google_auth": check_auth_status()})
+    except FileNotFoundError as e:
+        return jsonify({"success": False, "error": str(e)}), 400
+    except Exception as e:
+        return jsonify({"success": False, "error": f"{type(e).__name__}: {e}"}), 500
+
 
 
 @app.route("/settings", methods=["GET"])

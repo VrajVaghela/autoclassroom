@@ -233,3 +233,21 @@ def test_browse_folder_cancel(client, monkeypatch):
 
     monkeypatch.setattr(server.subprocess, "run", lambda *a, **k: Proc())
     assert client.post("/browse_folder", headers=HEADERS, json={}).get_json()["cancelled"] is True
+
+
+def test_auth_status_endpoint(client, monkeypatch):
+    monkeypatch.setattr(server, "check_auth_status", lambda: {"authenticated": True, "has_credentials": True, "message": "OK"})
+    resp = client.get("/auth/status", headers=HEADERS)
+    assert resp.status_code == 200
+    assert resp.get_json()["authenticated"] is True
+
+
+def test_auth_login_endpoint(client, monkeypatch):
+    called = []
+    monkeypatch.setattr(server, "authenticate_google", lambda: called.append(True))
+    monkeypatch.setattr(server, "check_auth_status", lambda: {"authenticated": True, "has_credentials": True, "message": "OK"})
+    resp = client.post("/auth/login", headers=HEADERS)
+    assert resp.status_code == 200
+    assert resp.get_json()["success"] is True
+    assert len(called) == 1
+

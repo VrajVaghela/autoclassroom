@@ -85,6 +85,34 @@ def authenticate_google():
     drive_service = build('drive', 'v3', credentials=creds)
     return classroom_service, drive_service
 
+def check_auth_status():
+    """Checks if Google Classroom authentication is ready (token.json valid or refreshable)."""
+    has_creds = os.path.exists(CREDENTIALS_PATH) or bool(
+        os.environ.get("GOOGLE_CREDENTIALS_JSON") or os.environ.get("CREDENTIALS_JSON") or os.environ.get("GOOGLE_CREDENTIALS")
+    )
+    if not os.path.exists(TOKEN_PATH):
+        return {
+            "authenticated": False,
+            "has_credentials": has_creds,
+            "message": "Not authenticated. Sign in with Google Classroom required."
+        }
+    try:
+        creds = Credentials.from_authorized_user_file(TOKEN_PATH, SCOPES)
+        if creds and (creds.valid or (creds.expired and creds.refresh_token)):
+            return {
+                "authenticated": True,
+                "has_credentials": has_creds,
+                "message": "Connected to Google Classroom"
+            }
+    except Exception as e:
+        print(f"Auth status check error: {e}")
+
+    return {
+        "authenticated": False,
+        "has_credentials": has_creds,
+        "message": "Authentication required or token expired."
+    }
+
 def extract_pdf_text(file_stream):
     """Extract text from a downloaded PDF byte stream."""
     text = ""

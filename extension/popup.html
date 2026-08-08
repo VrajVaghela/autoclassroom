@@ -23,6 +23,14 @@
 
     <p id="providerLine" class="muted">Checking server…</p>
 
+    <div id="googleAuthCard" class="auth-card" hidden>
+      <div class="auth-card-info">
+        <span class="auth-icon">🔑</span>
+        <span id="googleAuthText">First-time setup: Connect Google Classroom</span>
+      </div>
+      <button id="googleAuthBtn" class="google-btn" type="button">Sign in with Google</button>
+    </div>
+
     <button id="triggerBtn" class="primary" type="button">Solve this assignment</button>
 
     <div id="status" class="status" role="status" aria-live="polite"></div>
@@ -41,6 +49,15 @@
       </button>
       <h1>Settings</h1>
     </header>
+
+    <div class="field">
+      <label>Google Classroom Account</label>
+      <div class="row">
+        <span id="settingsAuthBadge" class="auth-badge">Checking…</span>
+        <button id="settingsAuthBtn" class="secondary" type="button">Sign in with Google</button>
+      </div>
+      <p class="hint" id="settingsAuthHint">Allows AutoClassroom to fetch your assignment instructions & attachments.</p>
+    </div>
 
     <div class="field">
       <label for="serverUrlInput">Backend Server URL</label>

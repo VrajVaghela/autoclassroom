@@ -58,8 +58,37 @@ function serverDownMessage(error) {
 
 /* ---------------------------------------------------------------- main view */
 
+function updateGoogleAuthUI(authInfo) {
+  const authCard = $("googleAuthCard");
+  const authText = $("googleAuthText");
+  const badge = $("settingsAuthBadge");
+  const btn = $("settingsAuthBtn");
+
+  if (!authInfo) return;
+
+  if (authInfo.authenticated) {
+    if (authCard) authCard.hidden = true;
+    if (badge) {
+      badge.textContent = "Connected ✓";
+      badge.className = "auth-badge ok";
+    }
+    if (btn) btn.textContent = "Re-authenticate";
+  } else {
+    if (authCard) {
+      authCard.hidden = false;
+      if (authText) authText.textContent = authInfo.message || "First-time setup: Connect Google Classroom";
+    }
+    if (badge) {
+      badge.textContent = authInfo.has_credentials ? "Not Connected" : "Missing Credentials";
+      badge.className = "auth-badge err";
+    }
+    if (btn) btn.textContent = "Sign in with Google";
+  }
+}
+
 async function refreshHeader() {
   const line = $("providerLine");
+  const authCard = $("googleAuthCard");
   try {
     const health = await api("/health");
     const model = health.model || "no model set";
@@ -70,9 +99,39 @@ async function refreshHeader() {
     if (!health.has_key) {
       show($("status"), "err", "Add an API key in settings to get started.");
     }
+    if (health.google_auth) {
+      updateGoogleAuthUI(health.google_auth);
+    }
   } catch (error) {
     line.textContent = serverDownMessage(error);
     $("triggerBtn").disabled = true;
+    if (authCard) authCard.hidden = true;
+  }
+}
+
+async function signInGoogle() {
+  const status = $("status");
+  const authBtn = $("googleAuthBtn");
+  const settingsBtn = $("settingsAuthBtn");
+  if (authBtn) authBtn.disabled = true;
+  if (settingsBtn) settingsBtn.disabled = true;
+
+  show(status, "info", "Opening Google sign-in page in your browser… Please complete the login.", true);
+
+  try {
+    const res = await api("/auth/login", { method: "POST" });
+    if (res.success) {
+      show(status, "ok", "Google Classroom connected successfully!");
+      if (res.google_auth) updateGoogleAuthUI(res.google_auth);
+      refreshHeader();
+    } else {
+      show(status, "err", res.error || "Failed to sign in with Google Classroom.");
+    }
+  } catch (error) {
+    show(status, "err", serverDownMessage(error));
+  } finally {
+    if (authBtn) authBtn.disabled = false;
+    if (settingsBtn) settingsBtn.disabled = false;
   }
 }
 
@@ -415,6 +474,9 @@ document.addEventListener("DOMContentLoaded", () => {
   $("saveBtn").addEventListener("click", saveSettings);
   $("browseBtn").addEventListener("click", browseFolder);
   $("testBtn").addEventListener("click", testConnection);
+
+  if ($("googleAuthBtn")) $("googleAuthBtn").addEventListener("click", signInGoogle);
+  if ($("settingsAuthBtn")) $("settingsAuthBtn").addEventListener("click", signInGoogle);
 
   $("providerSelect").addEventListener("change", renderProviderFields);
   $("runCode").addEventListener("change", renderRunFields);
