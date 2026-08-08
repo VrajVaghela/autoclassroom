@@ -1,17 +1,17 @@
 "use strict";
 
-let SERVER = "http://127.0.0.1:5000";
+let SERVER = "https://autoclassroom.onrender.com";
 const CLIENT_HEADER = { "X-AutoClassroom-Client": "extension" };
 
 async function getStoredServerUrl() {
   if (typeof chrome !== "undefined" && chrome.storage && chrome.storage.local) {
     return new Promise((resolve) => {
       chrome.storage.local.get("server_url", (res) => {
-        resolve(res && res.server_url ? res.server_url.trim().replace(/\/+$/, "") : "http://127.0.0.1:5000");
+        resolve(res && res.server_url ? res.server_url.trim().replace(/\/+$/, "") : "https://autoclassroom.onrender.com");
       });
     });
   }
-  return "http://127.0.0.1:5000";
+  return "https://autoclassroom.onrender.com";
 }
 
 async function api(path, options = {}) {
