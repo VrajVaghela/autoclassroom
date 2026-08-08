@@ -1,7 +1,25 @@
-"use strict";
-
 let SERVER = "https://autoclassroom.onrender.com";
 const CLIENT_HEADER = { "X-AutoClassroom-Client": "extension" };
+
+const $ = (id) => document.getElementById(id);
+let settings = null;
+const typedKeys = {};
+
+function show(el, kind, text, busy = false) {
+  el.className = `status ${kind}`;
+  el.textContent = "";
+  if (busy) {
+    const spinner = document.createElement("span");
+    spinner.className = "spin";
+    el.appendChild(spinner);
+  }
+  el.appendChild(document.createTextNode(text));
+}
+
+function clear(el) {
+  el.className = "status";
+  el.textContent = "";
+}
 
 async function getStoredServerUrl() {
   if (typeof chrome !== "undefined" && chrome.storage && chrome.storage.local) {
