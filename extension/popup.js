@@ -1,4 +1,4 @@
-let SERVER = "https://autoclassroom.onrender.com";
+let SERVER = "http://127.0.0.1:5000";
 const CLIENT_HEADER = { "X-AutoClassroom-Client": "extension" };
 
 const $ = (id) => document.getElementById(id);
@@ -25,11 +25,11 @@ async function getStoredServerUrl() {
   if (typeof chrome !== "undefined" && chrome.storage && chrome.storage.local) {
     return new Promise((resolve) => {
       chrome.storage.local.get("server_url", (res) => {
-        resolve(res && res.server_url ? res.server_url.trim().replace(/\/+$/, "") : "https://autoclassroom.onrender.com");
+        resolve(res && res.server_url ? res.server_url.trim().replace(/\/+$/, "") : "http://127.0.0.1:5000");
       });
     });
   }
-  return "https://autoclassroom.onrender.com";
+  return "http://127.0.0.1:5000";
 }
 
 async function api(path, options = {}) {
@@ -53,7 +53,16 @@ async function api(path, options = {}) {
 
 function serverDownMessage(error) {
   const offline = error instanceof TypeError || /Failed to fetch/i.test(error.message);
-  return offline ? "Can't reach the server. Is server.py running?" : error.message;
+  if (offline) {
+    return "Can't reach server. Please run 'python server.py' on your computer or check Backend Server URL in settings.";
+  }
+  if (/HTTP 404/i.test(error.message)) {
+    return "Server returned HTTP 404. If using Render, the backend may be restarting. Try again or switch to http://127.0.0.1:5000 in Settings.";
+  }
+  if (/HTTP 502|HTTP 503|HTTP 504/i.test(error.message)) {
+    return "Server is temporarily unavailable. Please wait a few seconds and try again.";
+  }
+  return error.message;
 }
 
 /* ---------------------------------------------------------------- main view */
@@ -115,6 +124,20 @@ async function signInGoogle() {
   const settingsBtn = $("settingsAuthBtn");
   if (authBtn) authBtn.disabled = true;
   if (settingsBtn) settingsBtn.disabled = true;
+
+  const serverUrl = await getStoredServerUrl();
+  const isRemote = serverUrl.startsWith("https://");
+
+  if (isRemote) {
+    show(
+      status,
+      "err",
+      "To sign in with Google Classroom, run 'python server.py' locally and set Backend Server URL to http://127.0.0.1:5000 in Settings."
+    );
+    if (authBtn) authBtn.disabled = false;
+    if (settingsBtn) settingsBtn.disabled = false;
+    return;
+  }
 
   show(status, "info", "Opening Google sign-in page in your browser… Please complete the login.", true);
 
