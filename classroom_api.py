@@ -19,27 +19,67 @@ SCOPES = [
     'https://www.googleapis.com/auth/drive.readonly'
 ]
 
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+CREDENTIALS_PATH = os.environ.get("CREDENTIALS_PATH", os.path.join(BASE_DIR, "credentials.json"))
+TOKEN_PATH = os.environ.get("TOKEN_PATH", os.path.join(BASE_DIR, "token.json"))
+
 def authenticate_google():
     """Authenticates the user and returns the Classroom and Drive service client objects."""
     creds = None
+
+    # Check if credentials exist in environment variables if not present on disk
+    if not os.path.exists(CREDENTIALS_PATH):
+        env_creds = os.environ.get("GOOGLE_CREDENTIALS_JSON") or os.environ.get("CREDENTIALS_JSON") or os.environ.get("GOOGLE_CREDENTIALS")
+        if env_creds:
+            try:
+                with open(CREDENTIALS_PATH, 'w', encoding='utf-8') as f:
+                    f.write(env_creds)
+            except Exception as e:
+                print(f"Warning: Could not write env credentials to {CREDENTIALS_PATH}: {e}")
+
+    # Check if token exists in environment variable if not present on disk
+    if not os.path.exists(TOKEN_PATH):
+        env_token = os.environ.get("GOOGLE_TOKEN_JSON") or os.environ.get("TOKEN_JSON")
+        if env_token:
+            try:
+                with open(TOKEN_PATH, 'w', encoding='utf-8') as f:
+                    f.write(env_token)
+            except Exception as e:
+                print(f"Warning: Could not write env token to {TOKEN_PATH}: {e}")
+
     # We will store the user's access and refresh tokens in token.json
-    if os.path.exists('token.json'):
-        creds = Credentials.from_authorized_user_file('token.json', SCOPES)
+    if os.path.exists(TOKEN_PATH):
+        try:
+            creds = Credentials.from_authorized_user_file(TOKEN_PATH, SCOPES)
+        except Exception as e:
+            print(f"Warning: Could not load token file ({e}). Will re-authenticate.")
+            creds = None
     
     # If there are no valid credentials available, let the user log in.
     if not creds or not creds.valid:
         if creds and creds.expired and creds.refresh_token:
-            creds.refresh(Request())
-        else:
-            if not os.path.exists('credentials.json'):
-                raise FileNotFoundError("Missing 'credentials.json' in the current directory.")
-            flow = InstalledAppFlow.from_client_secrets_file('credentials.json', SCOPES)
+            try:
+                creds.refresh(Request())
+            except Exception as e:
+                print(f"Token refresh failed ({e}). Re-authenticating...")
+                creds = None
+
+        if not creds or not creds.valid:
+            if not os.path.exists(CREDENTIALS_PATH):
+                raise FileNotFoundError(
+                    f"Missing 'credentials.json' in {BASE_DIR}. "
+                    "Please place credentials.json in the project root directory or set the GOOGLE_CREDENTIALS_JSON environment variable."
+                )
+            flow = InstalledAppFlow.from_client_secrets_file(CREDENTIALS_PATH, SCOPES)
             # Run local server to catch the callback
             creds = flow.run_local_server(port=0)
         
         # Save the credentials for the next run
-        with open('token.json', 'w') as token:
-            token.write(creds.to_json())
+        try:
+            with open(TOKEN_PATH, 'w', encoding='utf-8') as token:
+                token.write(creds.to_json())
+        except Exception as e:
+            print(f"Warning: Could not save token file ({e}).")
             
     classroom_service = build('classroom', 'v1', credentials=creds)
     drive_service = build('drive', 'v3', credentials=creds)
