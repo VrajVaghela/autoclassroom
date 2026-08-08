@@ -68,36 +68,31 @@ function serverDownMessage(error) {
 /* ---------------------------------------------------------------- main view */
 
 function updateGoogleAuthUI(authInfo) {
-  const authCard = $("googleAuthCard");
-  const authText = $("googleAuthText");
   const badge = $("settingsAuthBadge");
   const btn = $("settingsAuthBtn");
 
   if (!authInfo) return;
 
   if (authInfo.authenticated) {
-    if (authCard) authCard.hidden = true;
     if (badge) {
       badge.textContent = "Connected ✓";
       badge.className = "auth-badge ok";
     }
-    if (btn) btn.textContent = "Re-authenticate";
+    if (btn) btn.hidden = true;
   } else {
-    if (authCard) {
-      authCard.hidden = false;
-      if (authText) authText.textContent = authInfo.message || "First-time setup: Connect Google Classroom";
-    }
     if (badge) {
       badge.textContent = authInfo.has_credentials ? "Not Connected" : "Missing Credentials";
       badge.className = "auth-badge err";
     }
-    if (btn) btn.textContent = "Sign in with Google";
+    if (btn) {
+      btn.hidden = false;
+      btn.textContent = "Sign in with Google";
+    }
   }
 }
 
 async function refreshHeader() {
   const line = $("providerLine");
-  const authCard = $("googleAuthCard");
   try {
     const health = await api("/health");
     const model = health.model || "no model set";
@@ -114,15 +109,13 @@ async function refreshHeader() {
   } catch (error) {
     line.textContent = serverDownMessage(error);
     $("triggerBtn").disabled = true;
-    if (authCard) authCard.hidden = true;
   }
 }
 
 async function signInGoogle() {
-  const status = $("status");
-  const authBtn = $("googleAuthBtn");
+  const isSettings = $("settingsView") && !$("settingsView").hidden;
+  const status = isSettings ? $("settingsStatus") : $("status");
   const settingsBtn = $("settingsAuthBtn");
-  if (authBtn) authBtn.disabled = true;
   if (settingsBtn) settingsBtn.disabled = true;
 
   const serverUrl = await getStoredServerUrl();
@@ -134,7 +127,6 @@ async function signInGoogle() {
       "err",
       "To sign in with Google Classroom, run 'python server.py' locally and set Backend Server URL to http://127.0.0.1:5000 in Settings."
     );
-    if (authBtn) authBtn.disabled = false;
     if (settingsBtn) settingsBtn.disabled = false;
     return;
   }
@@ -153,7 +145,6 @@ async function signInGoogle() {
   } catch (error) {
     show(status, "err", serverDownMessage(error));
   } finally {
-    if (authBtn) authBtn.disabled = false;
     if (settingsBtn) settingsBtn.disabled = false;
   }
 }
@@ -498,7 +489,6 @@ document.addEventListener("DOMContentLoaded", () => {
   $("browseBtn").addEventListener("click", browseFolder);
   $("testBtn").addEventListener("click", testConnection);
 
-  if ($("googleAuthBtn")) $("googleAuthBtn").addEventListener("click", signInGoogle);
   if ($("settingsAuthBtn")) $("settingsAuthBtn").addEventListener("click", signInGoogle);
 
   $("providerSelect").addEventListener("change", renderProviderFields);
