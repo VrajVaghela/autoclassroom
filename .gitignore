@@ -12,6 +12,7 @@ venv.bak/
 
 # Secret files
 credentials.json
+client_secret_*.json
 token.json
 .env
 config.json
