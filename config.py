@@ -25,7 +25,7 @@ DEFAULT_OUTPUT_DIR = os.path.join(CONFIG_DIR, "lab")
 
 # provider key -> (label, env var, default model, api base)
 PROVIDERS = {
-    "gemini": ("Google Gemini", "GEMINI_API_KEY", "gemini-2.0-flash",
+    "gemini": ("Google Gemini", "GEMINI_API_KEY", "gemini-2.5-flash",
                "https://generativelanguage.googleapis.com/v1beta"),
     "openai": ("OpenAI", "OPENAI_API_KEY", "gpt-4o",
                "https://api.openai.com/v1"),
