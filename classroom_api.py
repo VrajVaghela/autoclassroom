@@ -1,6 +1,7 @@
 import os
 import io
 import json
+import base64
 import pdfplumber
 
 # Fixes the "Server Error: Scope has changed from..." exception

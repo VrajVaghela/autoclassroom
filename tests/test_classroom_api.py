@@ -96,3 +96,27 @@ def test_credentials_from_token_data():
     creds, refreshed = classroom_api.credentials_from_token_data(dummy_token)
     assert creds.refresh_token == "1//test"
     assert refreshed is None
+
+
+def test_oauth_state_encoding_and_decoding():
+    session_id = "test-session-123"
+    verifier = "pkce-code-verifier-xyz"
+
+    encoded = classroom_api.encode_oauth_state(session_id, verifier)
+    assert isinstance(encoded, str)
+
+    extracted_sess, extracted_verifier = classroom_api.decode_oauth_state(encoded)
+    assert extracted_sess == session_id
+    assert extracted_verifier == verifier
+
+
+def test_decode_oauth_state_fallback():
+    # Legacy plain string state
+    sess, verifier = classroom_api.decode_oauth_state("plain-session-id")
+    assert sess == "plain-session-id"
+    assert verifier is None
+
+    # Empty state
+    sess, verifier = classroom_api.decode_oauth_state("")
+    assert sess == ""
+    assert verifier is None
