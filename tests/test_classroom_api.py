@@ -81,3 +81,18 @@ def test_save_token_data_invalid_json(tmp_path, monkeypatch):
 
     with pytest.raises(ValueError, match="Invalid JSON"):
         classroom_api.save_token_data("not valid json")
+
+
+def test_credentials_from_token_data():
+    dummy_token = {
+        "token": "ya29.test",
+        "refresh_token": "1//test",
+        "token_uri": "https://oauth2.googleapis.com/token",
+        "client_id": "test-client-id",
+        "client_secret": "test-client-secret",
+        "scopes": classroom_api.SCOPES,
+    }
+
+    creds, refreshed = classroom_api.credentials_from_token_data(dummy_token)
+    assert creds.refresh_token == "1//test"
+    assert refreshed is None

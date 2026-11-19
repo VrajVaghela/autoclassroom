@@ -73,7 +73,7 @@ def save_token_data(token_input):
 
     return creds
 
-def get_web_auth_flow(redirect_uri):
+def get_web_auth_flow(redirect_uri, state=None):
     """Builds a google_auth_oauthlib.flow.Flow for web-based OAuth."""
     _ensure_credentials_file()
     if not os.path.exists(CREDENTIALS_PATH):
@@ -87,15 +87,19 @@ def get_web_auth_flow(redirect_uri):
         scopes=SCOPES,
         redirect_uri=redirect_uri
     )
-    auth_url, state = flow.authorization_url(
-        access_type='offline',
-        include_granted_scopes='true',
-        prompt='consent'
-    )
-    return flow, auth_url, state
+    auth_kwargs = {
+        "access_type": "offline",
+        "include_granted_scopes": "true",
+        "prompt": "consent",
+    }
+    if state:
+        auth_kwargs["state"] = state
 
-def complete_web_auth(code, redirect_uri):
-    """Exchanges authorization code for credentials and saves to TOKEN_PATH."""
+    auth_url, generated_state = flow.authorization_url(**auth_kwargs)
+    return flow, auth_url, generated_state
+
+def complete_web_auth(code, redirect_uri, save_to_disk=True):
+    """Exchanges authorization code for credentials."""
     _ensure_credentials_file()
     flow = Flow.from_client_secrets_file(
         CREDENTIALS_PATH,
@@ -104,12 +108,40 @@ def complete_web_auth(code, redirect_uri):
     )
     flow.fetch_token(code=code)
     creds = flow.credentials
-    try:
-        with open(TOKEN_PATH, 'w', encoding='utf-8') as token:
-            token.write(creds.to_json())
-    except Exception as e:
-        print(f"Warning: Could not save token file ({e}).")
+    if save_to_disk:
+        try:
+            with open(TOKEN_PATH, 'w', encoding='utf-8') as token:
+                token.write(creds.to_json())
+        except Exception as e:
+            print(f"Warning: Could not save token file ({e}).")
     return creds
+
+def credentials_from_token_data(token_input):
+    """
+    Creates a valid Google Credentials object from a dict or JSON string.
+    Refreshes the token if expired and a refresh token is present.
+    Returns (creds, refreshed_token_dict_or_None).
+    """
+    if isinstance(token_input, str):
+        try:
+            token_data = json.loads(token_input)
+        except Exception as e:
+            raise ValueError(f"Invalid JSON format for token: {e}")
+    elif isinstance(token_input, dict):
+        token_data = token_input
+    else:
+        raise ValueError("token_input must be a JSON string or dict")
+
+    creds = Credentials.from_authorized_user_info(token_data, SCOPES)
+    refreshed_data = None
+    if creds.expired and creds.refresh_token:
+        try:
+            creds.refresh(Request())
+            refreshed_data = json.loads(creds.to_json())
+        except Exception as e:
+            print(f"Warning: Failed to refresh user token: {e}")
+
+    return creds, refreshed_data
 
 def authenticate_google():
     """Authenticates the user and returns the Classroom and Drive service client objects."""
@@ -235,12 +267,17 @@ def download_attachment(drive_service, file_id, mime_type):
         print(f"Failed to download/parse attachment {file_id}: {e}")
         return ""
 
-def get_assignment_details(course_id, coursework_id):
+def get_assignment_details(course_id, coursework_id, creds=None):
     """
     Given an assignment, returns the title, standard description, 
     and the combined text of all attached instructional files.
+    Accepts optional per-request credentials for multi-tenant users.
     """
-    classroom_service, drive_service = authenticate_google()
+    if creds is not None:
+        classroom_service = build('classroom', 'v1', credentials=creds)
+        drive_service = build('drive', 'v3', credentials=creds)
+    else:
+        classroom_service, drive_service = authenticate_google()
     
     # Get coursework from Google Classroom
     coursework = classroom_service.courses().courseWork().get(

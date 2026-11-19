@@ -76,28 +76,62 @@ function serverDownMessage(error) {
 
 /* ---------------------------------------------------------------- main view */
 
-function updateGoogleAuthUI(authInfo) {
+async function getStoredGoogleToken() {
+  if (typeof chrome !== "undefined" && chrome.storage && chrome.storage.local) {
+    return new Promise((resolve) => {
+      chrome.storage.local.get("user_google_token", (res) => {
+        resolve(res?.user_google_token || null);
+      });
+    });
+  }
+  return null;
+}
+
+async function updateGoogleAuthUI(authInfo) {
   const badge = $("settingsAuthBadge");
   const btn = $("settingsAuthBtn");
 
-  if (!authInfo) return;
+  if (!badge) return;
 
-  if (authInfo.authenticated) {
-    if (badge) {
-      badge.textContent = "Connected ✓";
-      badge.className = "auth-badge ok";
+  const userToken = await getStoredGoogleToken();
+  if (userToken) {
+    const accountStr = userToken.account ? ` (${userToken.account})` : " (Personal)";
+    badge.textContent = `Connected${accountStr} ✓`;
+    badge.className = "auth-badge ok";
+    if (btn) {
+      btn.hidden = false;
+      btn.textContent = "Disconnect";
+      btn.onclick = disconnectGoogle;
     }
-    if (btn) btn.hidden = true;
+    return;
+  }
+
+  if (authInfo && authInfo.authenticated) {
+    badge.textContent = "Shared Server ✓";
+    badge.className = "auth-badge ok";
+    if (btn) {
+      btn.hidden = false;
+      btn.textContent = "Use My Google Account";
+      btn.onclick = signInGoogle;
+    }
   } else {
-    if (badge) {
-      badge.textContent = authInfo.has_credentials ? "Not Connected" : "Missing Credentials";
-      badge.className = "auth-badge err";
-    }
+    badge.textContent = "Not Connected";
+    badge.className = "auth-badge err";
     if (btn) {
       btn.hidden = false;
       btn.textContent = "Sign in with Google";
+      btn.onclick = signInGoogle;
     }
   }
+}
+
+async function disconnectGoogle() {
+  const status = $("settingsStatus") || $("status");
+  if (typeof chrome !== "undefined" && chrome.storage && chrome.storage.local) {
+    await chrome.storage.local.remove("user_google_token");
+  }
+  show(status, "info", "Google account disconnected from this browser.");
+  refreshHeader();
 }
 
 async function refreshHeader() {
@@ -113,7 +147,7 @@ async function refreshHeader() {
       show($("status"), "err", "Add an API key in settings to get started.");
     }
     if (health.google_auth) {
-      updateGoogleAuthUI(health.google_auth);
+      await updateGoogleAuthUI(health.google_auth);
     }
   } catch (error) {
     line.textContent = serverDownMessage(error);
@@ -123,23 +157,20 @@ async function refreshHeader() {
 
 async function uploadTokenFile(file) {
   const status = $("settingsStatus");
-  show(status, "info", "Uploading and verifying token…", true);
+  show(status, "info", "Loading token file…", true);
   try {
     const text = await file.text();
     const tokenObj = JSON.parse(text);
-    const res = await api("/auth/token", {
-      method: "POST",
-      body: JSON.stringify({ token: tokenObj }),
-    });
-    if (res.success) {
-      show(status, "ok", "Google Classroom token synced successfully!");
-      if (res.google_auth) updateGoogleAuthUI(res.google_auth);
-      refreshHeader();
-    } else {
-      show(status, "err", res.error || "Failed to sync token.");
+    if (!tokenObj.token && !tokenObj.refresh_token) {
+      throw new Error("Invalid token.json: missing token or refresh_token fields.");
     }
+    if (typeof chrome !== "undefined" && chrome.storage && chrome.storage.local) {
+      await chrome.storage.local.set({ user_google_token: tokenObj });
+    }
+    show(status, "ok", "Personal Google token saved in your browser!");
+    refreshHeader();
   } catch (err) {
-    show(status, "err", `Token upload error: ${err.message}`);
+    show(status, "err", `Token error: ${err.message}`);
   }
 }
 
@@ -150,63 +181,38 @@ async function signInGoogle() {
   if (settingsBtn) settingsBtn.disabled = true;
 
   const serverUrl = await getStoredServerUrl();
-  const isRemote = serverUrl.startsWith("https://");
+  const sessionId = Math.random().toString(36).substring(2) + Date.now().toString(36);
+  const authStartUrl = `${serverUrl}/auth/google/start?session_id=${sessionId}`;
 
-  if (isRemote) {
-    show(status, "info", "Opening Google sign-in page in a new tab…", true);
-    const authStartUrl = `${serverUrl}/auth/google/start`;
-    if (typeof chrome !== "undefined" && chrome.tabs && chrome.tabs.create) {
-      chrome.tabs.create({ url: authStartUrl });
-    } else {
-      window.open(authStartUrl, "_blank");
+  show(status, "info", "Opening Google sign-in page in a new tab…", true);
+  if (typeof chrome !== "undefined" && chrome.tabs && chrome.tabs.create) {
+    chrome.tabs.create({ url: authStartUrl });
+  } else {
+    window.open(authStartUrl, "_blank");
+  }
+
+  // Poll for token exchange every 2 seconds
+  let pollAttempts = 0;
+  const pollInterval = setInterval(async () => {
+    pollAttempts++;
+    if (pollAttempts > 45) { // 90 seconds
+      clearInterval(pollInterval);
+      if (settingsBtn) settingsBtn.disabled = false;
+      return;
     }
-
-    // Poll auth status for 90 seconds while user completes Google auth in the new tab
-    let pollAttempts = 0;
-    const pollInterval = setInterval(async () => {
-      pollAttempts++;
-      if (pollAttempts > 36) {
+    try {
+      const res = await api(`/auth/google/token?session_id=${sessionId}`);
+      if (res && res.success && res.token) {
         clearInterval(pollInterval);
-        if (settingsBtn) settingsBtn.disabled = false;
-        return;
-      }
-      try {
-        const check = await api("/auth/status");
-        if (check && check.authenticated) {
-          clearInterval(pollInterval);
-          show(status, "ok", "Google Classroom connected successfully!");
-          updateGoogleAuthUI(check);
-          refreshHeader();
-          if (settingsBtn) settingsBtn.disabled = false;
+        if (typeof chrome !== "undefined" && chrome.storage && chrome.storage.local) {
+          await chrome.storage.local.set({ user_google_token: res.token });
         }
-      } catch {}
-    }, 2500);
-    return;
-  }
-
-  show(status, "info", "Opening Google sign-in page in your browser… Please complete the login.", true);
-
-  try {
-    const res = await api("/auth/login", { method: "POST" });
-    if (res.requires_web_auth && res.auth_url) {
-      if (typeof chrome !== "undefined" && chrome.tabs && chrome.tabs.create) {
-        chrome.tabs.create({ url: res.auth_url });
-      } else {
-        window.open(res.auth_url, "_blank");
+        show(status, "ok", "Google Classroom connected successfully!");
+        refreshHeader();
+        if (settingsBtn) settingsBtn.disabled = false;
       }
-      show(status, "info", "Sign-in tab opened. Please complete the login, then return here.", true);
-    } else if (res.success) {
-      show(status, "ok", "Google Classroom connected successfully!");
-      if (res.google_auth) updateGoogleAuthUI(res.google_auth);
-      refreshHeader();
-    } else {
-      show(status, "err", res.error || "Failed to sign in with Google Classroom.");
-    }
-  } catch (error) {
-    show(status, "err", serverDownMessage(error));
-  } finally {
-    if (settingsBtn) settingsBtn.disabled = false;
-  }
+    } catch {}
+  }, 2000);
 }
 
 function currentTab() {
@@ -282,10 +288,19 @@ async function runAssignment() {
   show(status, "info", "Reading the assignment and generating your solution…", true);
 
   try {
+    const userToken = await getStoredGoogleToken();
     const data = await api("/process_assignment", {
       method: "POST",
-      body: JSON.stringify({ courseId: match[1], courseWorkId: match[2] }),
+      body: JSON.stringify({
+        courseId: match[1],
+        courseWorkId: match[2],
+        google_token: userToken || undefined,
+      }),
     });
+
+    if (data.refreshed_token && typeof chrome !== "undefined" && chrome.storage && chrome.storage.local) {
+      await chrome.storage.local.set({ user_google_token: data.refreshed_token });
+    }
 
     const notes = (data.notes || []).join(" ");
     show(status, "ok", `Solution generated! Downloading files to your machine… ${notes}`);

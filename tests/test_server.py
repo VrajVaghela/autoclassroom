@@ -275,3 +275,48 @@ def test_post_settings_ignores_downloads_folder_label(client):
     resp = client.post("/settings", headers=HEADERS, json={"output_dir": "Downloads Folder (Browser)"})
     assert resp.status_code == 200
 
+
+def test_auth_google_token_polling(client):
+    # Missing session_id -> 400
+    assert client.get("/auth/google/token").status_code == 400
+
+    # Non-existent session_id -> pending
+    resp = client.get("/auth/google/token?session_id=unknown")
+    assert resp.status_code == 200
+    assert resp.get_json()["pending"] is True
+
+    # Insert pending token
+    with server._tokens_lock:
+        server._pending_tokens["test_sess"] = {"token": {"access_token": "abc"}, "created": 9999999999}
+
+    resp = client.get("/auth/google/token?session_id=test_sess")
+    assert resp.status_code == 200
+    assert resp.get_json()["success"] is True
+    assert resp.get_json()["token"]["access_token"] == "abc"
+
+
+def test_process_assignment_with_custom_google_token(client, monkeypatch):
+    called_creds = []
+
+    def dummy_get_assignment(course_id, coursework_id, creds=None):
+        called_creds.append(creds)
+        return "Assignment 1", "Solve the problem."
+
+    monkeypatch.setattr(server, "get_assignment_details", dummy_get_assignment)
+    monkeypatch.setattr(server, "generate_solution", lambda title, instructions, cfg: {"questions": 1, "notes": []})
+    monkeypatch.setattr(server, "save_solution", lambda title, solution, cfg: {"dir": "/tmp/test", "files": ["sol.py"], "notes": []})
+    monkeypatch.setattr(server, "credentials_from_token_data", lambda t: ("dummy_cred_obj", None))
+
+    resp = client.post(
+        "/process_assignment",
+        headers=HEADERS,
+        json={
+            "courseId": "123",
+            "courseWorkId": "456",
+            "google_token": {"token": "user_tok"},
+        },
+    )
+    assert resp.status_code == 200
+    assert resp.get_json()["success"] is True
+    assert called_creds[0] == "dummy_cred_obj"
+

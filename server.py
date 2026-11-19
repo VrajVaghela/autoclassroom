@@ -16,6 +16,7 @@ import re
 import subprocess
 import sys
 import threading
+import time
 
 from flask import Flask, jsonify, redirect, request, send_file
 from flask_cors import CORS
@@ -27,6 +28,7 @@ from classroom_api import (
     authenticate_google,
     check_auth_status,
     complete_web_auth,
+    credentials_from_token_data,
     get_assignment_details,
     get_web_auth_flow,
     save_token_data,
@@ -63,6 +65,19 @@ CLIENT_HEADER = "X-AutoClassroom-Client"
 # Google OAuth flow. Concurrent runs would interleave all three.
 _run_lock = threading.Lock()
 
+# Ephemeral store for web OAuth token exchange: session_id -> { "token": dict, "created": float }
+_pending_tokens = {}
+_tokens_lock = threading.Lock()
+
+
+def _cleanup_pending_tokens():
+    """Remove pending tokens older than 10 minutes."""
+    now = time.time()
+    with _tokens_lock:
+        stale = [sid for sid, data in _pending_tokens.items() if now - data.get("created", 0) > 600]
+        for sid in stale:
+            _pending_tokens.pop(sid, None)
+
 
 @app.before_request
 def require_client_header():
@@ -78,7 +93,7 @@ def require_client_header():
     """
     if request.method == "OPTIONS":
         return None
-    if request.path in ("/auth/google/start", "/auth/google/callback"):
+    if request.path in ("/auth/google/start", "/auth/google/callback", "/auth/google/token"):
         return None
     if not request.headers.get(CLIENT_HEADER):
         return jsonify({"error": "This endpoint is only callable from the AutoClassroom extension."}), 403
@@ -123,10 +138,14 @@ def get_auth_status():
 def auth_google_start():
     """Start browser-based web OAuth flow."""
     try:
+        session_id = request.args.get("session_id", "").strip()
         proto = request.headers.get("X-Forwarded-Proto", request.scheme)
         host = request.headers.get("X-Forwarded-Host", request.host)
         redirect_uri = f"{proto}://{host}/auth/google/callback"
-        _flow, auth_url, _state = get_web_auth_flow(redirect_uri)
+        try:
+            _flow, auth_url, _state = get_web_auth_flow(redirect_uri, state=session_id)
+        except TypeError:
+            _flow, auth_url, _state = get_web_auth_flow(redirect_uri)
         return redirect(auth_url)
     except FileNotFoundError as e:
         return f"<h3>Authentication Setup Error</h3><p>{e}</p>", 400
@@ -142,6 +161,7 @@ def auth_google_callback():
         return f"<h3>Google Sign-In Cancelled or Denied</h3><p>{error}</p>", 400
 
     code = request.args.get("code")
+    session_id = request.args.get("state", "").strip()
     if not code:
         return "<h3>Missing authorization code from Google</h3>", 400
 
@@ -149,26 +169,41 @@ def auth_google_callback():
         proto = request.headers.get("X-Forwarded-Proto", request.scheme)
         host = request.headers.get("X-Forwarded-Host", request.host)
         redirect_uri = f"{proto}://{host}/auth/google/callback"
-        complete_web_auth(code, redirect_uri)
-        return """<!DOCTYPE html>
+        # If session_id is provided, keep it ephemeral so other users' tokens aren't overwritten on disk!
+        save_to_disk = not bool(session_id)
+        creds = complete_web_auth(code, redirect_uri, save_to_disk=save_to_disk)
+        token_data = json.loads(creds.to_json())
+
+        if session_id:
+            _cleanup_pending_tokens()
+            with _tokens_lock:
+                _pending_tokens[session_id] = {
+                    "token": token_data,
+                    "created": time.time(),
+                }
+
+        account_email = token_data.get("account", "")
+        account_msg = f" for <b>{account_email}</b>" if account_email else ""
+
+        return f"""<!DOCTYPE html>
 <html>
 <head>
   <meta charset="utf-8">
   <title>AutoClassroom - Connected</title>
   <style>
-    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #0f172a; color: #f8fafc; display: flex; align-items: center; justify-content: center; height: 100vh; margin: 0; }
-    .card { background: #1e293b; padding: 2.5rem; border-radius: 12px; box-shadow: 0 10px 25px rgba(0,0,0,0.5); text-align: center; max-width: 440px; border: 1px solid #334155; }
-    h2 { color: #38bdf8; margin-top: 0; }
-    p { color: #94a3b8; font-size: 14px; line-height: 1.6; }
-    .badge { display: inline-block; background: #065f46; color: #34d399; padding: 6px 14px; border-radius: 9999px; font-size: 13px; font-weight: 600; margin-bottom: 12px; }
-    .btn { display: inline-block; margin-top: 16px; padding: 10px 20px; background: #2563eb; color: #fff; text-decoration: none; border-radius: 6px; font-size: 14px; cursor: pointer; border: none; font-weight: 500; }
+    body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #0f172a; color: #f8fafc; display: flex; align-items: center; justify-content: center; height: 100vh; margin: 0; }}
+    .card {{ background: #1e293b; padding: 2.5rem; border-radius: 12px; box-shadow: 0 10px 25px rgba(0,0,0,0.5); text-align: center; max-width: 440px; border: 1px solid #334155; }}
+    h2 {{ color: #38bdf8; margin-top: 0; }}
+    p {{ color: #94a3b8; font-size: 14px; line-height: 1.6; }}
+    .badge {{ display: inline-block; background: #065f46; color: #34d399; padding: 6px 14px; border-radius: 9999px; font-size: 13px; font-weight: 600; margin-bottom: 12px; }}
+    .btn {{ display: inline-block; margin-top: 16px; padding: 10px 20px; background: #2563eb; color: #fff; text-decoration: none; border-radius: 6px; font-size: 14px; cursor: pointer; border: none; font-weight: 500; }}
   </style>
 </head>
 <body>
   <div class="card">
     <div class="badge">Connected</div>
     <h2>AutoClassroom Connected!</h2>
-    <p>Your Google Classroom account has been successfully authenticated on this server.</p>
+    <p>Your Google Classroom account{account_msg} has been authenticated.</p>
     <p>You can now close this tab and return to the Chrome Extension.</p>
     <button class="btn" onclick="window.close()">Close this window</button>
   </div>
@@ -176,6 +211,26 @@ def auth_google_callback():
 </html>"""
     except Exception as e:
         return f"<h3>Authentication Completion Error</h3><p>{type(e).__name__}: {e}</p>", 500
+
+
+@app.route("/auth/google/token", methods=["GET"])
+def auth_google_token():
+    """Retrieve an ephemeral token exchanged via session_id."""
+    session_id = request.args.get("session_id", "").strip()
+    if not session_id:
+        return jsonify({"error": "session_id parameter is required."}), 400
+
+    _cleanup_pending_tokens()
+    with _tokens_lock:
+        token_info = _pending_tokens.pop(session_id, None)
+
+    if token_info:
+        return jsonify({
+            "success": True,
+            "token": token_info["token"],
+        })
+
+    return jsonify({"success": False, "pending": True}), 200
 
 
 @app.route("/auth/token", methods=["POST"])
@@ -364,11 +419,33 @@ def process_assignment():
         return jsonify({"error": "Another assignment is already being processed."}), 409
 
     try:
+        user_token = data.get("google_token") or request.headers.get("X-Google-Token")
+        creds = None
+        refreshed_token = None
+        if user_token:
+            try:
+                creds, refreshed_token = credentials_from_token_data(user_token)
+            except Exception as e:
+                return jsonify({"error": f"Invalid Google Classroom credentials: {e}"}), 401
+
         cfg = config.load()
+        # Allow per-request AI provider / model overrides if sent from extension
+        if data.get("provider") and data["provider"] in config.PROVIDERS:
+            cfg["provider"] = data["provider"]
+        if data.get("api_key"):
+            cfg["api_keys"][cfg["provider"]] = data["api_key"]
+        if data.get("model"):
+            cfg["models"][cfg["provider"]] = data["model"]
+        if data.get("custom_base_url"):
+            cfg["custom_base_url"] = data["custom_base_url"]
+
         provider_label = config.PROVIDERS[cfg["provider"]][0]
 
         print(f"--- Course {course_id} / assignment {coursework_id} ---")
-        title, instructions = get_assignment_details(course_id, coursework_id)
+        try:
+            title, instructions = get_assignment_details(course_id, coursework_id, creds=creds)
+        except TypeError:
+            title, instructions = get_assignment_details(course_id, coursework_id)
         if not (instructions or "").strip():
             return jsonify({"error": "That assignment has no instructions or readable attachments."}), 400
 
@@ -383,7 +460,8 @@ def process_assignment():
         message = f"Saved {len(result['files'])} file(s) to {result['dir']}"
         if questions > 1:
             message += f" for {questions} question(s)"
-        return jsonify({
+
+        resp = {
             "success": True,
             "message": message,
             "title": title,
@@ -394,7 +472,11 @@ def process_assignment():
             # Generation notes first: a question that failed matters more than a
             # file-writing detail.
             "notes": (solution.get("notes") or []) + result["notes"],
-        })
+        }
+        if refreshed_token:
+            resp["refreshed_token"] = refreshed_token
+
+        return jsonify(resp)
 
     except providers.ProviderError as e:
         print(f"Provider error: {e}")
