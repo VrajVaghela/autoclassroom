@@ -1,4 +1,5 @@
-let SERVER = "http://127.0.0.1:5000";
+const DEFAULT_SERVER_URL = "https://autoclassroom.onrender.com";
+let SERVER = DEFAULT_SERVER_URL;
 const CLIENT_HEADER = { "X-AutoClassroom-Client": "extension" };
 
 const $ = (id) => document.getElementById(id);
@@ -25,11 +26,16 @@ async function getStoredServerUrl() {
   if (typeof chrome !== "undefined" && chrome.storage && chrome.storage.local) {
     return new Promise((resolve) => {
       chrome.storage.local.get("server_url", (res) => {
-        resolve(res && res.server_url ? res.server_url.trim().replace(/\/+$/, "") : "http://127.0.0.1:5000");
+        // If nothing stored or stored as legacy local URL, default to cloud server
+        if (!res || !res.server_url || res.server_url === "http://127.0.0.1:5000") {
+          resolve(DEFAULT_SERVER_URL);
+        } else {
+          resolve(res.server_url.trim().replace(/\/+$/, ""));
+        }
       });
     });
   }
-  return "http://127.0.0.1:5000";
+  return DEFAULT_SERVER_URL;
 }
 
 async function api(path, options = {}) {
@@ -442,20 +448,44 @@ function collectPatch() {
   return patch;
 }
 
+async function switchServer() {
+  const status = $("settingsStatus");
+  const urlInput = $("serverUrlInput");
+  const target = (urlInput?.value || "").trim().replace(/\/+$/, "") || DEFAULT_SERVER_URL;
+  if (urlInput) urlInput.value = target;
+
+  if (typeof chrome !== "undefined" && chrome.storage && chrome.storage.local) {
+    await chrome.storage.local.set({ server_url: target });
+  }
+  SERVER = target;
+  show(status, "info", `Connecting to ${target}…`, true);
+  try {
+    await loadSettings();
+    show(status, "ok", "Connected successfully!");
+    refreshHeader();
+  } catch (err) {
+    show(status, "err", serverDownMessage(err));
+  }
+}
+
 async function saveSettings() {
   const status = $("settingsStatus");
   const button = $("saveBtn");
   button.disabled = true;
   show(status, "info", "Saving…", true);
 
-  if ($("serverUrlInput") && typeof chrome !== "undefined" && chrome.storage && chrome.storage.local) {
-    const customServer = $("serverUrlInput").value.trim();
-    if (customServer) {
+  const customServer = ($("serverUrlInput")?.value || "").trim().replace(/\/+$/, "");
+  if (customServer) {
+    if (typeof chrome !== "undefined" && chrome.storage && chrome.storage.local) {
       await chrome.storage.local.set({ server_url: customServer });
     }
+    SERVER = customServer;
   }
 
   try {
+    if (!settings) {
+      settings = await api("/settings");
+    }
     const data = await api("/settings", {
       method: "POST",
       body: JSON.stringify(collectPatch()),
@@ -546,6 +576,19 @@ document.addEventListener("DOMContentLoaded", () => {
   $("saveBtn").addEventListener("click", saveSettings);
   $("browseBtn").addEventListener("click", browseFolder);
   $("testBtn").addEventListener("click", testConnection);
+
+  const switchBtn = $("switchServerBtn");
+  if (switchBtn) switchBtn.addEventListener("click", switchServer);
+
+  const serverInput = $("serverUrlInput");
+  if (serverInput) {
+    serverInput.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") {
+        e.preventDefault();
+        switchServer();
+      }
+    });
+  }
 
   if ($("settingsAuthBtn")) $("settingsAuthBtn").addEventListener("click", signInGoogle);
 
