@@ -73,8 +73,24 @@ def save_token_data(token_input):
 
     return creds
 
-def get_web_auth_flow(redirect_uri, state=None):
-    """Builds a google_auth_oauthlib.flow.Flow for web-based OAuth."""
+def encode_oauth_state(session_id, code_verifier):
+    """Pack session_id and PKCE code_verifier into a URL-safe state string."""
+    payload = {"s": session_id or "", "v": code_verifier or ""}
+    return base64.urlsafe_b64encode(json.dumps(payload).encode("utf-8")).decode("utf-8")
+
+def decode_oauth_state(raw_state):
+    """Extract session_id and PKCE code_verifier from a state string."""
+    if not raw_state:
+        return "", None
+    try:
+        data = json.loads(base64.urlsafe_b64decode(raw_state.encode("utf-8")).decode("utf-8"))
+        return data.get("s", ""), data.get("v")
+    except Exception:
+        return raw_state, None
+
+def get_web_auth_flow(redirect_uri, session_id=None, state=None):
+    """Builds a google_auth_oauthlib.flow.Flow for web-based OAuth with PKCE support."""
+    import urllib.parse
     _ensure_credentials_file()
     if not os.path.exists(CREDENTIALS_PATH):
         raise FileNotFoundError(
@@ -92,20 +108,33 @@ def get_web_auth_flow(redirect_uri, state=None):
         "include_granted_scopes": "true",
         "prompt": "consent",
     }
-    if state:
-        auth_kwargs["state"] = state
 
-    auth_url, generated_state = flow.authorization_url(**auth_kwargs)
-    return flow, auth_url, generated_state
+    # Generate auth_url; this populates flow.code_verifier for PKCE
+    auth_url, _generated_state = flow.authorization_url(**auth_kwargs)
 
-def complete_web_auth(code, redirect_uri, save_to_disk=True):
-    """Exchanges authorization code for credentials."""
+    # Pack session_id and flow.code_verifier into state so any backend worker can verify it
+    chosen_session = session_id or state
+    encoded_state = encode_oauth_state(chosen_session, flow.code_verifier)
+
+    parsed = urllib.parse.urlsplit(auth_url)
+    qs = urllib.parse.parse_qs(parsed.query)
+    qs["state"] = [encoded_state]
+    new_query = urllib.parse.urlencode(qs, doseq=True)
+    auth_url = urllib.parse.urlunsplit(parsed._replace(query=new_query))
+
+    return flow, auth_url, encoded_state
+
+def complete_web_auth(code, redirect_uri, code_verifier=None, save_to_disk=True):
+    """Exchanges authorization code for credentials using the matching PKCE code_verifier."""
     _ensure_credentials_file()
     flow = Flow.from_client_secrets_file(
         CREDENTIALS_PATH,
         scopes=SCOPES,
         redirect_uri=redirect_uri
     )
+    if code_verifier:
+        flow.code_verifier = code_verifier
+
     flow.fetch_token(code=code)
     creds = flow.credentials
     if save_to_disk:

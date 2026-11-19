@@ -15,6 +15,7 @@ import os
 import re
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 
@@ -29,6 +30,7 @@ from classroom_api import (
     check_auth_status,
     complete_web_auth,
     credentials_from_token_data,
+    decode_oauth_state,
     get_assignment_details,
     get_web_auth_flow,
     save_token_data,
@@ -66,17 +68,52 @@ CLIENT_HEADER = "X-AutoClassroom-Client"
 _run_lock = threading.Lock()
 
 # Ephemeral store for web OAuth token exchange: session_id -> { "token": dict, "created": float }
+# Backed by shared filesystem so multiple Gunicorn workers can coordinate safely.
+_SESSION_DIR = os.path.join(tempfile.gettempdir(), "autoclassroom_sessions")
+try:
+    os.makedirs(_SESSION_DIR, exist_ok=True)
+except Exception:
+    pass
+
 _pending_tokens = {}
 _tokens_lock = threading.Lock()
 
 
-def _cleanup_pending_tokens():
-    """Remove pending tokens older than 10 minutes."""
-    now = time.time()
+def _store_pending_token(session_id, token_data):
+    if not session_id:
+        return
+    safe_id = "".join(c for c in session_id if c.isalnum() or c in ("-", "_"))[:64]
+    filepath = os.path.join(_SESSION_DIR, f"{safe_id}.json")
+    try:
+        with open(filepath, "w", encoding="utf-8") as f:
+            json.dump({"token": token_data, "created": time.time()}, f)
+    except Exception:
+        pass
     with _tokens_lock:
-        stale = [sid for sid, data in _pending_tokens.items() if now - data.get("created", 0) > 600]
-        for sid in stale:
-            _pending_tokens.pop(sid, None)
+        _pending_tokens[safe_id] = {"token": token_data, "created": time.time()}
+
+
+def _get_pending_token(session_id):
+    if not session_id:
+        return None
+    safe_id = "".join(c for c in session_id if c.isalnum() or c in ("-", "_"))[:64]
+    filepath = os.path.join(_SESSION_DIR, f"{safe_id}.json")
+    if os.path.isfile(filepath):
+        try:
+            with open(filepath, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            try:
+                os.remove(filepath)
+            except OSError:
+                pass
+            return data.get("token")
+        except Exception:
+            pass
+    with _tokens_lock:
+        token_info = _pending_tokens.pop(safe_id, None)
+        if token_info:
+            return token_info.get("token")
+    return None
 
 
 @app.before_request
@@ -143,7 +180,7 @@ def auth_google_start():
         host = request.headers.get("X-Forwarded-Host", request.host)
         redirect_uri = f"{proto}://{host}/auth/google/callback"
         try:
-            _flow, auth_url, _state = get_web_auth_flow(redirect_uri, state=session_id)
+            _flow, auth_url, _state = get_web_auth_flow(redirect_uri, session_id=session_id)
         except TypeError:
             _flow, auth_url, _state = get_web_auth_flow(redirect_uri)
         return redirect(auth_url)
@@ -161,7 +198,9 @@ def auth_google_callback():
         return f"<h3>Google Sign-In Cancelled or Denied</h3><p>{error}</p>", 400
 
     code = request.args.get("code")
-    session_id = request.args.get("state", "").strip()
+    raw_state = request.args.get("state", "").strip()
+    session_id, code_verifier = decode_oauth_state(raw_state)
+
     if not code:
         return "<h3>Missing authorization code from Google</h3>", 400
 
@@ -171,16 +210,14 @@ def auth_google_callback():
         redirect_uri = f"{proto}://{host}/auth/google/callback"
         # If session_id is provided, keep it ephemeral so other users' tokens aren't overwritten on disk!
         save_to_disk = not bool(session_id)
-        creds = complete_web_auth(code, redirect_uri, save_to_disk=save_to_disk)
+        try:
+            creds = complete_web_auth(code, redirect_uri, code_verifier=code_verifier, save_to_disk=save_to_disk)
+        except TypeError:
+            creds = complete_web_auth(code, redirect_uri, save_to_disk=save_to_disk)
         token_data = json.loads(creds.to_json())
 
         if session_id:
-            _cleanup_pending_tokens()
-            with _tokens_lock:
-                _pending_tokens[session_id] = {
-                    "token": token_data,
-                    "created": time.time(),
-                }
+            _store_pending_token(session_id, token_data)
 
         account_email = token_data.get("account", "")
         account_msg = f" for <b>{account_email}</b>" if account_email else ""
@@ -220,14 +257,11 @@ def auth_google_token():
     if not session_id:
         return jsonify({"error": "session_id parameter is required."}), 400
 
-    _cleanup_pending_tokens()
-    with _tokens_lock:
-        token_info = _pending_tokens.pop(session_id, None)
-
-    if token_info:
+    token_data = _get_pending_token(session_id)
+    if token_data:
         return jsonify({
             "success": True,
-            "token": token_info["token"],
+            "token": token_data,
         })
 
     return jsonify({"success": False, "pending": True}), 200

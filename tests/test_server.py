@@ -286,8 +286,7 @@ def test_auth_google_token_polling(client):
     assert resp.get_json()["pending"] is True
 
     # Insert pending token
-    with server._tokens_lock:
-        server._pending_tokens["test_sess"] = {"token": {"access_token": "abc"}, "created": 9999999999}
+    server._store_pending_token("test_sess", {"access_token": "abc"})
 
     resp = client.get("/auth/google/token?session_id=test_sess")
     assert resp.status_code == 200
