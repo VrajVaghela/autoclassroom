@@ -54,13 +54,16 @@ async function api(path, options = {}) {
 function serverDownMessage(error) {
   const offline = error instanceof TypeError || /Failed to fetch/i.test(error.message);
   if (offline) {
+    if (SERVER && SERVER.startsWith("https://")) {
+      return "Can't reach remote server. Render free instances sleep when idle and take ~30–50s to wake up. Please wait a moment and try again.";
+    }
     return "Can't reach server. Please run 'python server.py' on your computer or check Backend Server URL in settings.";
   }
   if (/HTTP 404/i.test(error.message)) {
-    return "Server returned HTTP 404. If using Render, the backend may be restarting. Try again or switch to http://127.0.0.1:5000 in Settings.";
+    return "Server returned HTTP 404. If using Render, the backend may be restarting. Try again or check your Backend Server URL in Settings.";
   }
   if (/HTTP 502|HTTP 503|HTTP 504/i.test(error.message)) {
-    return "Server is temporarily unavailable. Please wait a few seconds and try again.";
+    return "Server is temporarily unavailable (wake-up in progress). Please wait a few seconds and try again.";
   }
   return error.message;
 }
@@ -112,6 +115,28 @@ async function refreshHeader() {
   }
 }
 
+async function uploadTokenFile(file) {
+  const status = $("settingsStatus");
+  show(status, "info", "Uploading and verifying token…", true);
+  try {
+    const text = await file.text();
+    const tokenObj = JSON.parse(text);
+    const res = await api("/auth/token", {
+      method: "POST",
+      body: JSON.stringify({ token: tokenObj }),
+    });
+    if (res.success) {
+      show(status, "ok", "Google Classroom token synced successfully!");
+      if (res.google_auth) updateGoogleAuthUI(res.google_auth);
+      refreshHeader();
+    } else {
+      show(status, "err", res.error || "Failed to sync token.");
+    }
+  } catch (err) {
+    show(status, "err", `Token upload error: ${err.message}`);
+  }
+}
+
 async function signInGoogle() {
   const isSettings = $("settingsView") && !$("settingsView").hidden;
   const status = isSettings ? $("settingsStatus") : $("status");
@@ -122,12 +147,34 @@ async function signInGoogle() {
   const isRemote = serverUrl.startsWith("https://");
 
   if (isRemote) {
-    show(
-      status,
-      "err",
-      "To sign in with Google Classroom, run 'python server.py' locally and set Backend Server URL to http://127.0.0.1:5000 in Settings."
-    );
-    if (settingsBtn) settingsBtn.disabled = false;
+    show(status, "info", "Opening Google sign-in page in a new tab…", true);
+    const authStartUrl = `${serverUrl}/auth/google/start`;
+    if (typeof chrome !== "undefined" && chrome.tabs && chrome.tabs.create) {
+      chrome.tabs.create({ url: authStartUrl });
+    } else {
+      window.open(authStartUrl, "_blank");
+    }
+
+    // Poll auth status for 90 seconds while user completes Google auth in the new tab
+    let pollAttempts = 0;
+    const pollInterval = setInterval(async () => {
+      pollAttempts++;
+      if (pollAttempts > 36) {
+        clearInterval(pollInterval);
+        if (settingsBtn) settingsBtn.disabled = false;
+        return;
+      }
+      try {
+        const check = await api("/auth/status");
+        if (check && check.authenticated) {
+          clearInterval(pollInterval);
+          show(status, "ok", "Google Classroom connected successfully!");
+          updateGoogleAuthUI(check);
+          refreshHeader();
+          if (settingsBtn) settingsBtn.disabled = false;
+        }
+      } catch {}
+    }, 2500);
     return;
   }
 
@@ -135,7 +182,14 @@ async function signInGoogle() {
 
   try {
     const res = await api("/auth/login", { method: "POST" });
-    if (res.success) {
+    if (res.requires_web_auth && res.auth_url) {
+      if (typeof chrome !== "undefined" && chrome.tabs && chrome.tabs.create) {
+        chrome.tabs.create({ url: res.auth_url });
+      } else {
+        window.open(res.auth_url, "_blank");
+      }
+      show(status, "info", "Sign-in tab opened. Please complete the login, then return here.", true);
+    } else if (res.success) {
       show(status, "ok", "Google Classroom connected successfully!");
       if (res.google_auth) updateGoogleAuthUI(res.google_auth);
       refreshHeader();
@@ -364,13 +418,17 @@ async function loadSettings() {
 
 function collectPatch() {
   const provider = $("providerSelect").value;
+  const isRemote = SERVER.startsWith("https://");
+  const rawDir = $("outputDir").value.trim();
   const patch = {
-    output_dir: $("outputDir").value.trim(),
     provider,
     run_code: $("runCode").checked,
     repair_attempts: Number($("repairAttempts").value),
     models: { [provider]: $("modelInput").value.trim() },
   };
+  if (!isRemote && rawDir && rawDir !== "Downloads Folder (Browser)") {
+    patch.output_dir = rawDir;
+  }
   if (provider === "custom") {
     patch.custom_base_url = $("baseUrlInput").value.trim();
   }
@@ -490,6 +548,17 @@ document.addEventListener("DOMContentLoaded", () => {
   $("testBtn").addEventListener("click", testConnection);
 
   if ($("settingsAuthBtn")) $("settingsAuthBtn").addEventListener("click", signInGoogle);
+
+  const syncBtn = $("syncTokenBtn");
+  const tokenFile = $("tokenFileInput");
+  if (syncBtn && tokenFile) {
+    syncBtn.addEventListener("click", () => tokenFile.click());
+    tokenFile.addEventListener("change", (e) => {
+      if (e.target.files && e.target.files[0]) {
+        uploadTokenFile(e.target.files[0]);
+      }
+    });
+  }
 
   $("providerSelect").addEventListener("change", renderProviderFields);
   $("runCode").addEventListener("change", renderRunFields);

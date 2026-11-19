@@ -37,6 +37,8 @@ PROVIDERS = {
              "https://api.groq.com/openai/v1"),
     "xai": ("xAI Grok", "XAI_API_KEY", "grok-2-latest",
             "https://api.x.ai/v1"),
+    "tokenrouter": ("TokenRouter", "TOKENROUTER_API_KEY", "moonshotai/kimi-k3-free",
+                    "https://api.tokenrouter.com/v1"),
     "custom": ("Custom (OpenAI-compatible)", "CUSTOM_API_KEY", "",
                ""),
 }

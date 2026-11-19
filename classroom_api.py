@@ -7,7 +7,7 @@ import pdfplumber
 os.environ['OAUTHLIB_RELAX_TOKEN_SCOPE'] = '1'
 
 from google.oauth2.credentials import Credentials
-from google_auth_oauthlib.flow import InstalledAppFlow
+from google_auth_oauthlib.flow import InstalledAppFlow, Flow
 from google.auth.transport.requests import Request
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseDownload
@@ -23,11 +23,8 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 CREDENTIALS_PATH = os.environ.get("CREDENTIALS_PATH", os.path.join(BASE_DIR, "credentials.json"))
 TOKEN_PATH = os.environ.get("TOKEN_PATH", os.path.join(BASE_DIR, "token.json"))
 
-def authenticate_google():
-    """Authenticates the user and returns the Classroom and Drive service client objects."""
-    creds = None
-
-    # Check if credentials exist in environment variables if not present on disk
+def _ensure_credentials_file():
+    """Ensure credentials.json exists on disk if provided via environment variables."""
     if not os.path.exists(CREDENTIALS_PATH):
         env_creds = os.environ.get("GOOGLE_CREDENTIALS_JSON") or os.environ.get("CREDENTIALS_JSON") or os.environ.get("GOOGLE_CREDENTIALS")
         if env_creds:
@@ -37,7 +34,8 @@ def authenticate_google():
             except Exception as e:
                 print(f"Warning: Could not write env credentials to {CREDENTIALS_PATH}: {e}")
 
-    # Check if token exists in environment variable if not present on disk
+def _ensure_token_file():
+    """Ensure token.json exists on disk if provided via environment variables."""
     if not os.path.exists(TOKEN_PATH):
         env_token = os.environ.get("GOOGLE_TOKEN_JSON") or os.environ.get("TOKEN_JSON")
         if env_token:
@@ -46,6 +44,79 @@ def authenticate_google():
                     f.write(env_token)
             except Exception as e:
                 print(f"Warning: Could not write env token to {TOKEN_PATH}: {e}")
+
+def save_token_data(token_input):
+    """
+    Saves raw token JSON string or dict to TOKEN_PATH after validating.
+    Returns the loaded Credentials instance.
+    """
+    if isinstance(token_input, str):
+        try:
+            token_data = json.loads(token_input)
+        except Exception as e:
+            raise ValueError(f"Invalid JSON format for token: {e}")
+    elif isinstance(token_input, dict):
+        token_data = token_input
+    else:
+        raise ValueError("token_input must be a JSON string or dict")
+
+    try:
+        creds = Credentials.from_authorized_user_info(token_data, SCOPES)
+    except Exception as e:
+        raise ValueError(f"Token is not a valid Google OAuth user credentials object: {e}")
+
+    try:
+        with open(TOKEN_PATH, 'w', encoding='utf-8') as f:
+            json.dump(token_data, f, indent=2)
+    except Exception as e:
+        raise OSError(f"Could not write token file to {TOKEN_PATH}: {e}")
+
+    return creds
+
+def get_web_auth_flow(redirect_uri):
+    """Builds a google_auth_oauthlib.flow.Flow for web-based OAuth."""
+    _ensure_credentials_file()
+    if not os.path.exists(CREDENTIALS_PATH):
+        raise FileNotFoundError(
+            f"Missing 'credentials.json' in {BASE_DIR}. "
+            "Please configure Google credentials before starting web authorization."
+        )
+
+    flow = Flow.from_client_secrets_file(
+        CREDENTIALS_PATH,
+        scopes=SCOPES,
+        redirect_uri=redirect_uri
+    )
+    auth_url, state = flow.authorization_url(
+        access_type='offline',
+        include_granted_scopes='true',
+        prompt='consent'
+    )
+    return flow, auth_url, state
+
+def complete_web_auth(code, redirect_uri):
+    """Exchanges authorization code for credentials and saves to TOKEN_PATH."""
+    _ensure_credentials_file()
+    flow = Flow.from_client_secrets_file(
+        CREDENTIALS_PATH,
+        scopes=SCOPES,
+        redirect_uri=redirect_uri
+    )
+    flow.fetch_token(code=code)
+    creds = flow.credentials
+    try:
+        with open(TOKEN_PATH, 'w', encoding='utf-8') as token:
+            token.write(creds.to_json())
+    except Exception as e:
+        print(f"Warning: Could not save token file ({e}).")
+    return creds
+
+def authenticate_google():
+    """Authenticates the user and returns the Classroom and Drive service client objects."""
+    creds = None
+
+    _ensure_credentials_file()
+    _ensure_token_file()
 
     # We will store the user's access and refresh tokens in token.json
     if os.path.exists(TOKEN_PATH):
@@ -70,6 +141,15 @@ def authenticate_google():
                     f"Missing 'credentials.json' in {BASE_DIR}. "
                     "Please place credentials.json in the project root directory or set the GOOGLE_CREDENTIALS_JSON environment variable."
                 )
+
+            # Check if running in a headless/remote environment where run_local_server cannot work
+            is_headless = bool(os.environ.get("RENDER") or os.environ.get("HEADLESS"))
+            if is_headless:
+                raise RuntimeError(
+                    "Remote server authentication required: Sign in via web OAuth (/auth/google/start) "
+                    "or upload token.json / set the GOOGLE_TOKEN_JSON environment variable."
+                )
+
             flow = InstalledAppFlow.from_client_secrets_file(CREDENTIALS_PATH, SCOPES)
             # Run local server to catch the callback
             creds = flow.run_local_server(port=0)

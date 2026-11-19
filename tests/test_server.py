@@ -59,7 +59,7 @@ def test_settings_get_shape(client):
     body = client.get("/settings", headers=HEADERS).get_json()
     assert "output_dir" in body and "providers" in body
     keys = {p["key"] for p in body["providers"]}
-    assert {"gemini", "openai", "anthropic", "openrouter", "groq", "xai", "custom"} <= keys
+    assert {"gemini", "openai", "anthropic", "openrouter", "groq", "xai", "tokenrouter", "custom"} <= keys
 
 
 def test_settings_never_returns_raw_key(client):
@@ -250,4 +250,28 @@ def test_auth_login_endpoint(client, monkeypatch):
     assert resp.status_code == 200
     assert resp.get_json()["success"] is True
     assert len(called) == 1
+
+
+def test_auth_token_endpoint(client, monkeypatch):
+    saved = []
+    monkeypatch.setattr(server, "save_token_data", lambda data: saved.append(data))
+    monkeypatch.setattr(server, "check_auth_status", lambda: {"authenticated": True, "has_credentials": True, "message": "OK"})
+
+    resp = client.post("/auth/token", headers=HEADERS, json={"token": {"dummy": "token"}})
+    assert resp.status_code == 200
+    assert resp.get_json()["success"] is True
+    assert len(saved) == 1
+
+
+def test_web_auth_routes_exempt_from_client_header(client, monkeypatch):
+    monkeypatch.setattr(server, "get_web_auth_flow", lambda redirect_uri: (None, "https://accounts.google.com/auth", "state"))
+    # No HEADERS provided
+    resp = client.get("/auth/google/start")
+    assert resp.status_code == 302
+    assert resp.headers.get("Location") == "https://accounts.google.com/auth"
+
+
+def test_post_settings_ignores_downloads_folder_label(client):
+    resp = client.post("/settings", headers=HEADERS, json={"output_dir": "Downloads Folder (Browser)"})
+    assert resp.status_code == 200
 

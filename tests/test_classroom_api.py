@@ -54,3 +54,30 @@ def test_env_credentials_populates_file(monkeypatch, tmp_path):
     classroom, drive = classroom_api.authenticate_google()
     assert creds_file.exists()
     assert '{"installed": {"client_id": "test"}}' in creds_file.read_text()
+
+
+def test_save_token_data(tmp_path, monkeypatch):
+    token_file = tmp_path / "token.json"
+    monkeypatch.setattr(classroom_api, "TOKEN_PATH", str(token_file))
+
+    dummy_token = {
+        "token": "ya29.test",
+        "refresh_token": "1//test",
+        "token_uri": "https://oauth2.googleapis.com/token",
+        "client_id": "test-client-id",
+        "client_secret": "test-client-secret",
+        "scopes": classroom_api.SCOPES,
+    }
+
+    creds = classroom_api.save_token_data(dummy_token)
+    assert creds.refresh_token == "1//test"
+    assert token_file.exists()
+    assert "ya29.test" in token_file.read_text()
+
+
+def test_save_token_data_invalid_json(tmp_path, monkeypatch):
+    token_file = tmp_path / "token.json"
+    monkeypatch.setattr(classroom_api, "TOKEN_PATH", str(token_file))
+
+    with pytest.raises(ValueError, match="Invalid JSON"):
+        classroom_api.save_token_data("not valid json")

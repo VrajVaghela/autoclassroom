@@ -17,13 +17,20 @@ import subprocess
 import sys
 import threading
 
-from flask import Flask, jsonify, request, send_file
+from flask import Flask, jsonify, redirect, request, send_file
 from flask_cors import CORS
 
 import config
 import providers
 import repair
-from classroom_api import authenticate_google, check_auth_status, get_assignment_details
+from classroom_api import (
+    authenticate_google,
+    check_auth_status,
+    complete_web_auth,
+    get_assignment_details,
+    get_web_auth_flow,
+    save_token_data,
+)
 from file_manager import save_solution
 from llm_generator import generate_solution
 
@@ -65,8 +72,13 @@ def require_client_header():
     A cross-origin request carrying a custom header must pass preflight first,
     and CORS above only approves extension origins — so this blocks drive-by
     requests from ordinary web pages.
+
+    Exempt the web OAuth routes because browser navigation from Google's redirect
+    cannot provide custom headers.
     """
     if request.method == "OPTIONS":
+        return None
+    if request.path in ("/auth/google/start", "/auth/google/callback"):
         return None
     if not request.headers.get(CLIENT_HEADER):
         return jsonify({"error": "This endpoint is only callable from the AutoClassroom extension."}), 403
@@ -107,8 +119,100 @@ def get_auth_status():
     return jsonify(check_auth_status())
 
 
+@app.route("/auth/google/start", methods=["GET"])
+def auth_google_start():
+    """Start browser-based web OAuth flow."""
+    try:
+        proto = request.headers.get("X-Forwarded-Proto", request.scheme)
+        host = request.headers.get("X-Forwarded-Host", request.host)
+        redirect_uri = f"{proto}://{host}/auth/google/callback"
+        _flow, auth_url, _state = get_web_auth_flow(redirect_uri)
+        return redirect(auth_url)
+    except FileNotFoundError as e:
+        return f"<h3>Authentication Setup Error</h3><p>{e}</p>", 400
+    except Exception as e:
+        return f"<h3>Authentication Setup Error</h3><p>{type(e).__name__}: {e}</p>", 500
+
+
+@app.route("/auth/google/callback", methods=["GET"])
+def auth_google_callback():
+    """Google OAuth redirect endpoint."""
+    error = request.args.get("error")
+    if error:
+        return f"<h3>Google Sign-In Cancelled or Denied</h3><p>{error}</p>", 400
+
+    code = request.args.get("code")
+    if not code:
+        return "<h3>Missing authorization code from Google</h3>", 400
+
+    try:
+        proto = request.headers.get("X-Forwarded-Proto", request.scheme)
+        host = request.headers.get("X-Forwarded-Host", request.host)
+        redirect_uri = f"{proto}://{host}/auth/google/callback"
+        complete_web_auth(code, redirect_uri)
+        return """<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>AutoClassroom - Connected</title>
+  <style>
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #0f172a; color: #f8fafc; display: flex; align-items: center; justify-content: center; height: 100vh; margin: 0; }
+    .card { background: #1e293b; padding: 2.5rem; border-radius: 12px; box-shadow: 0 10px 25px rgba(0,0,0,0.5); text-align: center; max-width: 440px; border: 1px solid #334155; }
+    h2 { color: #38bdf8; margin-top: 0; }
+    p { color: #94a3b8; font-size: 14px; line-height: 1.6; }
+    .badge { display: inline-block; background: #065f46; color: #34d399; padding: 6px 14px; border-radius: 9999px; font-size: 13px; font-weight: 600; margin-bottom: 12px; }
+    .btn { display: inline-block; margin-top: 16px; padding: 10px 20px; background: #2563eb; color: #fff; text-decoration: none; border-radius: 6px; font-size: 14px; cursor: pointer; border: none; font-weight: 500; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <div class="badge">Connected</div>
+    <h2>AutoClassroom Connected!</h2>
+    <p>Your Google Classroom account has been successfully authenticated on this server.</p>
+    <p>You can now close this tab and return to the Chrome Extension.</p>
+    <button class="btn" onclick="window.close()">Close this window</button>
+  </div>
+</body>
+</html>"""
+    except Exception as e:
+        return f"<h3>Authentication Completion Error</h3><p>{type(e).__name__}: {e}</p>", 500
+
+
+@app.route("/auth/token", methods=["POST"])
+def auth_token():
+    """Upload or sync token.json data directly to the server."""
+    data = request.get_json(silent=True) or {}
+    token_input = data.get("token") or data.get("token_json")
+    if not token_input:
+        return jsonify({"error": "token or token_json parameter is required."}), 400
+
+    try:
+        save_token_data(token_input)
+        return jsonify({
+            "success": True,
+            "message": "Token synced and verified successfully!",
+            "google_auth": check_auth_status()
+        })
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+    except Exception as e:
+        return jsonify({"error": f"{type(e).__name__}: {e}"}), 500
+
+
 @app.route("/auth/login", methods=["POST"])
 def auth_login():
+    is_headless = bool(os.environ.get("RENDER") or os.environ.get("HEADLESS"))
+    if is_headless:
+        proto = request.headers.get("X-Forwarded-Proto", request.scheme)
+        host = request.headers.get("X-Forwarded-Host", request.host)
+        web_auth_url = f"{proto}://{host}/auth/google/start"
+        return jsonify({
+            "success": False,
+            "requires_web_auth": True,
+            "auth_url": web_auth_url,
+            "message": "Cloud server requires web authentication."
+        })
+
     try:
         authenticate_google()
         return jsonify({"success": True, "message": "Successfully authenticated with Google Classroom!", "google_auth": check_auth_status()})
@@ -116,7 +220,6 @@ def auth_login():
         return jsonify({"success": False, "error": str(e)}), 400
     except Exception as e:
         return jsonify({"success": False, "error": f"{type(e).__name__}: {e}"}), 500
-
 
 
 @app.route("/settings", methods=["GET"])
@@ -132,15 +235,17 @@ def post_settings():
 
     # Fail early with a clear message rather than writing an unusable folder.
     if patch.get("output_dir"):
-        target = os.path.abspath(os.path.expanduser(patch["output_dir"].strip()))
-        try:
-            os.makedirs(target, exist_ok=True)
-            probe = os.path.join(target, ".autoclassroom_write_test")
-            with open(probe, "w") as f:
-                f.write("ok")
-            os.unlink(probe)
-        except OSError as e:
-            return jsonify({"error": f"Cannot write to that folder: {e}"}), 400
+        raw_dir = patch["output_dir"].strip()
+        if raw_dir and raw_dir != "Downloads Folder (Browser)":
+            target = os.path.abspath(os.path.expanduser(raw_dir))
+            try:
+                os.makedirs(target, exist_ok=True)
+                probe = os.path.join(target, ".autoclassroom_write_test")
+                with open(probe, "w") as f:
+                    f.write("ok")
+                os.unlink(probe)
+            except OSError as e:
+                return jsonify({"error": f"Cannot write to that folder: {e}"}), 400
 
     try:
         config.update(patch)
